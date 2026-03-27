@@ -175,6 +175,101 @@ with st.sidebar:
                 use_container_width=True,
             ):
                 st.session_state["secili_gecmis"] = kayit
+    # ── Topluluk - Teyidi ──────────────────────────────────────────
+    st.markdown("## 🤝 Topluluk Teyidi")
+    st.caption("Kanıt sunarak haberin doğruluk skorunu güncelle")
+    st.divider()
+
+    gecmis = gecmis_yukle()
+
+    if not gecmis:
+        st.info("Önce bir haber analiz et.")
+    else:
+        # Hangi analiz için kanıt eklenecek
+        secenekler = {
+            f"%{k['skor']} — {k['metin_ozet']}": k for k in gecmis
+        }
+        secili_haber = st.selectbox(
+            "📰 Hangi haber için kanıt ekleyeceksin?",
+            options=list(secenekler.keys()),
+        )
+        kayit = secenekler[secili_haber]
+
+        st.markdown("### 📎 Kanıtını Ekle")
+
+        kanit_aciklama = st.text_area(
+            "Açıklama",
+            placeholder="Kanıtını açıkla: Bu haber doğru/yanlış çünkü...",
+            height=100,
+            key="kanit_aciklama",
+        )
+        kanit_link = st.text_input(
+            "🔗 Kaynak Link (opsiyonel)",
+            placeholder="https://...",
+            key="kanit_link",
+        )
+        kanit_dosya = st.file_uploader(
+            "📁 Dosya Ekle (opsiyonel)",
+            type=["jpg", "jpeg", "png", "pdf", "txt"],
+            key="kanit_dosya",
+        )
+
+        if st.button("🔍 Kanıtı Gönder", use_container_width=True):
+            if not kanit_aciklama.strip():
+                st.warning("Lütfen bir açıklama yaz.")
+            else:
+                with st.spinner("🤖 AI kanıtı inceliyor..."):
+                    try:
+                        from services.analysis import kanit_analiz
+
+                        kanit = {
+                            "aciklama": kanit_aciklama,
+                            "link": kanit_link or "Belirtilmedi",
+                            "dosya_adi": kanit_dosya.name if kanit_dosya else "Yok",
+                        }
+
+                        sonuc = kanit_analiz(
+                            kayit["metin_ozet"],
+                            kanit,
+                            kayit["skor"],
+                        )
+
+                        # Skoru güncelle
+                        for k in gecmis:
+                            if k["id"] == kayit["id"]:
+                                eski_skor = k["skor"]
+                                k["skor"] = sonuc["yeni_skor"]
+                                if "kanitlar" not in k:
+                                    k["kanitlar"] = []
+                                k["kanitlar"].append({
+                                    "tarih": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                                    "aciklama": kanit_aciklama,
+                                    "link": kanit_link,
+                                    "karar": sonuc["karar"],
+                                    "degisim": sonuc["skor_degisimi"],
+                                    "ai_aciklama": sonuc["aciklama"],
+                                })
+                                break
+
+                        gecmis_kaydet(gecmis)
+
+                        # Sonucu göster
+                        karar = sonuc["karar"]
+                        if "Doğrular" in karar:
+                            st.success(f"✅ {karar}")
+                        elif "Çürütür" in karar:
+                            st.error(f"❌ {karar}")
+                        else:
+                            st.warning(f"⚠️ {karar}")
+
+                        st.markdown(f"""
+                        **Kanıt Güvenilirliği:** {sonuc['kanit_guvenirligi']}  
+                        **Skor:** %{eski_skor} → %{sonuc['yeni_skor']} ({'+' if sonuc['skor_degisimi'] >= 0 else ''}{sonuc['skor_degisimi']})  
+                        **AI Değerlendirmesi:** {sonuc['aciklama']}
+                        """)
+
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
 
 # ── Ana içerik ───────────────────────────────────────────────────
 st.markdown("# 🔍 VeritasAI")

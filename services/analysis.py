@@ -154,3 +154,52 @@ def analyze_news_text(text: str, language: str = "tr", max_retries: int = 1) -> 
                 continue
 
     raise RuntimeError(f"Groq API hatası: {last_error}")
+# ── Kanıt Analizi ─────────────────────────────────────────────────
+def kanit_analiz(haber_metni: str, kanit: dict, mevcut_skor: int) -> dict:
+    kanit_metni = f"""
+Kanıt Açıklaması: {kanit.get('aciklama', '')}
+Kanıt Linki: {kanit.get('link', 'Belirtilmedi')}
+Dosya Eki: {kanit.get('dosya_adi', 'Yok')}
+"""
+    prompt = f"""Bir kullanıcı aşağıdaki haber için kanıt sundu. 
+Mevcut güvenilirlik skoru: %{mevcut_skor}
+
+HABER METNİ:
+{haber_metni}
+
+KULLANICI KANITI:
+{kanit_metni}
+
+Bu kanıtı değerlendir ve SADECE şu formatta yanıt ver:
+
+KARAR: [Doğrular / Çürütür / Kısmen Doğrular / Yetersiz Kanıt]
+SKOR_DEĞİŞİMİ: [+5 ile +20 arası sayı veya -5 ile -20 arası sayı veya 0]
+YENİ_SKOR: [0-100 arası yeni skor]
+KANIT_GÜVENİLİRLİĞİ: [Güçlü / Orta / Zayıf]
+AÇIKLAMA: [Kanıtı neden bu şekilde değerlendirdin, 2-3 cümle]"""
+
+    response = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[
+            {"role": "system", "content": SISTEM_MESAJI},
+            {"role": "user", "content": prompt},
+        ],
+        max_tokens=512,
+        temperature=0.2,
+    )
+    raw = response.choices[0].message.content
+
+    skor_str = parse(r"YENİ_SKOR:\s*(\d+)", raw)
+    yeni_skor = max(0, min(100, int(skor_str))) if skor_str else mevcut_skor
+
+    degisim_str = parse(r"SKOR_DEĞİŞİMİ:\s*([+-]?\d+)", raw)
+    degisim = int(degisim_str) if degisim_str else 0
+
+    return {
+        "karar": parse(r"KARAR:\s*(.+)", raw),
+        "skor_degisimi": degisim,
+        "yeni_skor": yeni_skor,
+        "kanit_guvenirligi": parse(r"KANIT_GÜVENİLİRLİĞİ:\s*(.+)", raw),
+        "aciklama": parse(r"AÇIKLAMA:\s*(.+)", raw),
+        "ham": raw,
+    }
