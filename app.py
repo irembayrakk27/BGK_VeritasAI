@@ -43,7 +43,7 @@ def gecmise_ekle(metin, rapor):
     return gecmis
 
 st.set_page_config(
-    page_title="VeritasAI",
+    page_title="VeritasAI — Ana Sayfa",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded",
