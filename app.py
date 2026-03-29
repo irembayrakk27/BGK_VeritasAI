@@ -38,9 +38,82 @@ def gecmise_ekle(metin, rapor):
         "rapor": rapor,
     }
     gecmis.insert(0, kayit)
-    gecmis = gecmis[:50]  # Max 50 kayıt tut
+    gecmis = gecmis[:50]
     gecmis_kaydet(gecmis)
     return gecmis
+
+# ── Rapor gösterme fonksiyonu ─────────────────────────────────────
+def rapor_goster(report):
+    skor = report.get("skor", 50)
+
+    if skor >= 80:
+        css_sinif, etiket = "skor-yesil", "✅ Güvenilir"
+    elif skor >= 50:
+        css_sinif, etiket = "skor-sari", "⚠️ Şüpheli"
+    else:
+        css_sinif, etiket = "skor-kirmizi", "❌ Güvenilmez"
+
+    st.markdown(f"""
+    <div class="skor-kutu {css_sinif}">
+        {etiket}<br>
+        <span style="font-size:1.2rem">Güvenilirlik Skoru</span><br>
+        %{skor}
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.progress(skor / 100)
+
+    st.markdown("### 🔎 Detay Analiz")
+    dcol1, dcol2 = st.columns(2)
+
+    with dcol1:
+        manipulasyon = report.get("manipulasyon", "Tespit edilmedi")
+        renk = "#f87171" if manipulasyon.lower() != "tespit edilmedi" else "#4ade80"
+        st.markdown(f"""
+        <div class="bilgi-kart">
+            <div class="bilgi-baslik">⚠️ Manipülasyon Tekniği</div>
+            <div class="bilgi-deger" style="color:{renk}">{manipulasyon}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with dcol2:
+        kaynak = report.get("kaynak_kalitesi", "Bilinmiyor")
+        if "güçlü" in kaynak.lower():
+            kaynak_renk = "#4ade80"
+        elif "orta" in kaynak.lower():
+            kaynak_renk = "#facc15"
+        else:
+            kaynak_renk = "#f87171"
+        st.markdown(f"""
+        <div class="bilgi-kart">
+            <div class="bilgi-baslik">📰 Kaynak Kalitesi</div>
+            <div class="bilgi-deger" style="color:{kaynak_renk}">{kaynak}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if report.get("gerekceler"):
+        st.markdown("### 📌 Gerekçeler")
+        ikonlar = ["1️⃣", "2️⃣", "3️⃣"]
+        for i, g in enumerate(report["gerekceler"]):
+            st.markdown(f"""
+            <div class="gerekcekart">{ikonlar[i]} {g}</div>
+            """, unsafe_allow_html=True)
+
+    if report.get("ozet"):
+        st.markdown("### 💬 Genel Değerlendirme")
+        st.info(report["ozet"])
+
+    if report.get("kaynaklar"):
+        st.markdown("### 🔗 İlgili Kaynaklar")
+        for kaynak in report["kaynaklar"]:
+            st.markdown(f"""
+            <div class="gerekcekart">
+                <b>📰 {kaynak.get('title', 'Kaynak')}</b><br>
+                <small>{kaynak.get('content', '')[:200]}...</small><br>
+                <a href="{kaynak.get('url', '#')}" target="_blank"
+                   style="color:#a855f7;">🔗 Kaynağa Git</a>
+            </div>
+            """, unsafe_allow_html=True)
 
 st.set_page_config(
     page_title="VeritasAI — Ana Sayfa",
@@ -120,7 +193,6 @@ st.markdown("""
         color: #e2d9f3;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background: #0d0d2b !important;
         border-right: 1px solid #4f46e5;
@@ -142,7 +214,7 @@ for key in ["last_report", "last_hash", "secili_gecmis"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
-# ── Sidebar — Geçmiş ─────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🕒 Analiz Geçmişi")
     st.divider()
@@ -175,7 +247,8 @@ with st.sidebar:
                 use_container_width=True,
             ):
                 st.session_state["secili_gecmis"] = kayit
-    # ── Topluluk - Teyidi ──────────────────────────────────────────
+
+    # ── Topluluk Teyidi ──────────────────────────────────────────
     st.markdown("## 🤝 Topluluk Teyidi")
     st.caption("Kanıt sunarak haberin doğruluk skorunu güncelle")
     st.divider()
@@ -185,7 +258,6 @@ with st.sidebar:
     if not gecmis:
         st.info("Önce bir haber analiz et.")
     else:
-        # Hangi analiz için kanıt eklenecek
         secenekler = {
             f"%{k['skor']} — {k['metin_ozet']}": k for k in gecmis
         }
@@ -234,7 +306,6 @@ with st.sidebar:
                             kayit["skor"],
                         )
 
-                        # Skoru güncelle
                         for k in gecmis:
                             if k["id"] == kayit["id"]:
                                 eski_skor = k["skor"]
@@ -253,7 +324,6 @@ with st.sidebar:
 
                         gecmis_kaydet(gecmis)
 
-                        # Sonucu göster
                         karar = sonuc["karar"]
                         if "Doğrular" in karar:
                             st.success(f"✅ {karar}")
@@ -276,7 +346,6 @@ st.markdown("# 🔍 VeritasAI")
 st.markdown("##### 🧠 Yapay zeka destekli haber doğrulama platformu")
 st.divider()
 
-# Geçmişten seçili kayıt varsa göster
 if st.session_state["secili_gecmis"]:
     kayit = st.session_state["secili_gecmis"]
     st.info(f"📂 Geçmiş kayıt gösteriliyor — {kayit['tarih']}")
@@ -314,67 +383,6 @@ current_hash = (
     hashlib.sha256(news_text_clean.encode("utf-8")).hexdigest()
     if news_text_clean else None
 )
-
-# ── Rapor gösterme fonksiyonu ─────────────────────────────────────
-def rapor_goster(report):
-    skor = report.get("skor", 50)
-
-    if skor >= 80:
-        css_sinif, etiket = "skor-yesil", "✅ Güvenilir"
-    elif skor >= 50:
-        css_sinif, etiket = "skor-sari", "⚠️ Şüpheli"
-    else:
-        css_sinif, etiket = "skor-kirmizi", "❌ Güvenilmez"
-
-    st.markdown(f"""
-    <div class="skor-kutu {css_sinif}">
-        {etiket}<br>
-        <span style="font-size:1.2rem">Güvenilirlik Skoru</span><br>
-        %{skor}
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.progress(skor / 100)
-
-    st.markdown("### 🔎 Detay Analiz")
-    dcol1, dcol2 = st.columns(2)
-
-    with dcol1:
-        manipulasyon = report.get("manipulasyon", "Tespit edilmedi")
-        renk = "#f87171" if manipulasyon.lower() != "tespit edilmedi" else "#4ade80"
-        st.markdown(f"""
-        <div class="bilgi-kart">
-            <div class="bilgi-baslik">⚠️ Manipülasyon Tekniği</div>
-            <div class="bilgi-deger" style="color:{renk}">{manipulasyon}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with dcol2:
-        kaynak = report.get("kaynak_kalitesi", "Bilinmiyor")
-        if "güçlü" in kaynak.lower():
-            kaynak_renk = "#4ade80"
-        elif "orta" in kaynak.lower():
-            kaynak_renk = "#facc15"
-        else:
-            kaynak_renk = "#f87171"
-        st.markdown(f"""
-        <div class="bilgi-kart">
-            <div class="bilgi-baslik">📰 Kaynak Kalitesi</div>
-            <div class="bilgi-deger" style="color:{kaynak_renk}">{kaynak}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    if report.get("gerekceler"):
-        st.markdown("### 📌 Gerekçeler")
-        ikonlar = ["1️⃣", "2️⃣", "3️⃣"]
-        for i, g in enumerate(report["gerekceler"]):
-            st.markdown(f"""
-            <div class="gerekcekart">{ikonlar[i]} {g}</div>
-            """, unsafe_allow_html=True)
-
-    if report.get("ozet"):
-        st.markdown("### 💬 Genel Değerlendirme")
-        st.info(report["ozet"])
 
 # ── Buton ────────────────────────────────────────────────────────
 if st.button("🔎 Gerçeği Sorgula", type="primary", use_container_width=True):

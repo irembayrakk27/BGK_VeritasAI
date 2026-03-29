@@ -120,6 +120,7 @@ Analiz edilecek metin:
         "kaynak_kalitesi": parse(r"KAYNAK_KALİTESİ:\s*(.+)", raw),
         "gerekceler": gerekceler,
         "ozet": parse(r"ÖZET:\s*(.+)", raw),
+        "kaynaklar": kaynak_ara(text[:200]),
         "ham": raw,
     }
 
@@ -138,6 +139,7 @@ def analyze_news_text(text: str, language: str = "tr", max_retries: int = 1) -> 
                 "kaynak_kalitesi": derin_sonuc["kaynak_kalitesi"],
                 "gerekceler": derin_sonuc["gerekceler"],
                 "ozet": derin_sonuc["ozet"],
+                "kaynaklar": derin_sonuc.get("kaynaklar", []),
                 "on_analiz": on_sonuc,
             }
         except Exception as e:
@@ -192,3 +194,21 @@ AÇIKLAMA: [Kanıtı neden bu şekilde değerlendirdin, 2-3 cümle]"""
         "aciklama": parse(r"AÇIKLAMA:\s*(.+)", raw),
         "ham": raw,
     }
+# ── Tavily Web Arama ──────────────────────────────────────────────
+def kaynak_ara(sorgu: str) -> list:
+    try:
+        from tavily import TavilyClient
+        TAVILY_KEY = os.getenv("TAVILY_API_KEY")
+        if not TAVILY_KEY:
+            print("TAVILY_API_KEY bulunamadı!")
+            return []
+        tavily = TavilyClient(api_key=TAVILY_KEY)
+        sonuclar = tavily.search(
+            query=sorgu,
+            max_results=3,
+            search_depth="basic",
+        )
+        return sonuclar.get("results", [])
+    except Exception as e:
+        print(f"Tavily hatası: {e}")
+        return []
