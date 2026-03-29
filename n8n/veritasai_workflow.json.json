@@ -1,0 +1,114 @@
+{
+  "name": "veritasai_workflow.json",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "37e421e5-4dd6-431f-a0ef-cd9cd4e56094",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "4e8d7e79-658c-419b-8a13-512f3bceaea9",
+      "name": "Webhook",
+      "webhookId": "37e421e5-4dd6-431f-a0ef-cd9cd4e56094"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "llama-3.3-70b-versatile",
+          "mode": "id"
+        },
+        "responses": {
+          "values": [
+            {
+              "content": "Ay peynirden yapılmıştır. Bu haberi analiz et ve 0-100 arası doğruluk skoru ver. Türkçe yanıt ver."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        0
+      ],
+      "id": "67ad2dad-cf0e-490e-b794-c33e2593cd87",
+      "name": "Message a model",
+      "credentials": {
+        "openAiApi": {
+          "id": "rOkYrq6prFjNvoR4",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "irembayrakk2005@gmail.com",
+        "subject": "⚠️ VeritasAI — Haber Analiz Sonucu",
+        "message": "=={{ $json.message.content }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        560,
+        0
+      ],
+      "id": "5c4918ea-3cad-47dd-97eb-5bcecef36b69",
+      "name": "Send a message",
+      "webhookId": "59c7e46a-66aa-4e18-bc3e-9621495af6d8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "RddnZknu3kx1T6qV",
+          "name": "Gmail OAuth2 API"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Message a model",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message a model": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
+  },
+  "versionId": "ef26edae-8da3-4718-a732-605d2ad7af82",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "2628f1200a75308299ed99f9d7ce784fab89ac4aee1ec1622d469876a358ad5f"
+  },
+  "id": "jzotvGxoxxetk74U",
+  "tags": []
+}

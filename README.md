@@ -52,3 +52,8 @@ streamlit run app.py
 ## Vizyon
 
 VeritasAI, yalnızca bir skor üreten araç değil; insan ve yapay zekayı birlikte kullanarak kamusal bilgi kalitesini artırmayı hedefleyen bir doğrulama asistanıdır.
+
+
+## n8n Otomasyon Akışı
+Haber analizi sonuçları otomatik olarak e-posta ile iletilir.
+Workflow dosyası: `n8n/veritasai_workflow.json`
