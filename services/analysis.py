@@ -4,10 +4,14 @@ from groq import Groq
 from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
+def get_api_key():
+    try:
+        import streamlit as st
+        return os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+    except:
+        return os.getenv("GROQ_API_KEY", "")
 
-import streamlit as st
-
-API_KEY = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
+API_KEY = get_api_key()
 if not API_KEY:
     raise ValueError("GROQ_API_KEY bulunamadı. .env dosyasını kontrol et.")
 
