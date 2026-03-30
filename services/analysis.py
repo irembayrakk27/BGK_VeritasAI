@@ -5,7 +5,9 @@ from dotenv import load_dotenv, find_dotenv
 
 load_dotenv(find_dotenv())
 
-API_KEY = os.getenv("GROQ_API_KEY")
+import streamlit as st
+
+API_KEY = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 if not API_KEY:
     raise ValueError("GROQ_API_KEY bulunamadı. .env dosyasını kontrol et.")
 
@@ -198,7 +200,7 @@ AÇIKLAMA: [Kanıtı neden bu şekilde değerlendirdin, 2-3 cümle]"""
 def kaynak_ara(sorgu: str) -> list:
     try:
         from tavily import TavilyClient
-        TAVILY_KEY = os.getenv("TAVILY_API_KEY")
+        TAVILY_KEY = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "")
         if not TAVILY_KEY:
             print("TAVILY_API_KEY bulunamadı!")
             return []
