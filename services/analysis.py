@@ -200,11 +200,13 @@ AÇIKLAMA: [Kanıtı neden bu şekilde değerlendirdin, 2-3 cümle]"""
         "aciklama": parse(r"AÇIKLAMA:\s*(.+)", raw),
         "ham": raw,
     }
-# ── Tavily Web Arama ──────────────────────────────────────────────
 def kaynak_ara(sorgu: str) -> list:
     try:
         from tavily import TavilyClient
-        TAVILY_KEY = os.getenv("TAVILY_API_KEY") or st.secrets.get("TAVILY_API_KEY", "")
+        try:
+            TAVILY_KEY = os.getenv("TAVILY_API_KEY") or st.secrets["TAVILY_API_KEY"]
+        except Exception:
+            TAVILY_KEY = os.getenv("TAVILY_API_KEY", "")
         if not TAVILY_KEY:
             print("TAVILY_API_KEY bulunamadı!")
             return []
