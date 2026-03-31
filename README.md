@@ -46,10 +46,10 @@ Dijital ortamda hızla yayılan bilgi kirliliğine karşı geliştirilen Veritas
 ![Analiz Sonucu 3](assets/screenshots/analiz.3.png)
 
 ### Topluluk Teyidi
-![Topluluk Teyidi](assets/screenshots/topluluk_teyidi.png)
+![Topluluk Teyidi](assets/screenshots/Topluluk_Teyidi.png)
 
 ### Otomasyon Sayfası
-![Otomasyon](assets/screenshots/otomasyon.png)
+![Otomasyon](assets/screenshots/Otomasyon_Merkezi.png)
 
 ---
 
