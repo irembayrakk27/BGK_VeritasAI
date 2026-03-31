@@ -57,3 +57,11 @@ VeritasAI, yalnızca bir skor üreten araç değil; insan ve yapay zekayı birli
 ## n8n Otomasyon Akışı
 Haber analizi sonuçları otomatik olarak e-posta ile iletilir.
 Workflow dosyası: `n8n/veritasai_workflow.json`
+
+##  Canlı Demo
+
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://veritasai-bgk.streamlit.app/)
+
+Uygulama Linki: [veritasai-bgk.streamlit.app](https://veritasai-bgk.streamlit.app/)
+
+Demo Videosu:[OneDrive'da İzle](https://onedrive.live.com/?qt=allmyphotos&photosData=%2Fshare%2F5A8EC6E8C698F743%21sa4a0ce9b02ed44bb9b0329d66fae5656%3Fithint%3Dvideo%26e%3D3NqRaf%26migratedtospo%3Dtrue&cid=5A8EC6E8C698F743&id=5A8EC6E8C698F743%21sa4a0ce9b02ed44bb9b0329d66fae5656&redeem=aHR0cHM6Ly8xZHJ2Lm1zL3YvYy81YThlYzZlOGM2OThmNzQzL0lRQ2J6cUNrN1FLN1JKc0RLZFp2cmxaV0FhcGZvcXl1aTZTMHUybjNRdFVfLWNVP2U9M05xUmFm&v=photos)
