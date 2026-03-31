@@ -41,7 +41,9 @@ Dijital ortamda hızla yayılan bilgi kirliliğine karşı geliştirilen Veritas
 ## 📸 Ekran Görüntüleri
 
 ### Ana Analiz Ekranı
-![Analiz Sonucu](assets/screenshots/analiz_sonucu.png)
+![Analiz Sonucu 1](assets/screenshots/analiz.1.png)
+![Analiz Sonucu 2](assets/screenshots/analiz.2.png)
+![Analiz Sonucu 3](assets/screenshots/analiz.3.png)
 
 ### Topluluk Teyidi
 ![Topluluk Teyidi](assets/screenshots/topluluk_teyidi.png)
