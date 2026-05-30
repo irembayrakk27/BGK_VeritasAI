@@ -13,3 +13,4 @@ Thumbs.db
 data/*.jsonl
 data/*.json
 data/*.csv
+data/.ipynb_checkpoints/
