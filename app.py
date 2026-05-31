@@ -260,7 +260,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Session state ────────────────────────────────────────────────
-for key in ["last_report", "last_hash", "secili_gecmis", "url_metin", "url_metin_kullanildi", "gorsel_sonuc", "video_sonuc"]:
+for key in ["last_report", "last_hash", "secili_gecmis", "url_metin", "url_metin_kullanildi", "gorsel_sonuc", "video_sonuc", "rag_sonuc"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -505,5 +505,173 @@ if (
     st.markdown("## 📊 Analiz Sonucu")
     rapor_goster(st.session_state["last_report"])
 
+
+    if st.session_state.get("rag_sonuc"):
+        rag = st.session_state["rag_sonuc"]
+
+        if rag.get("hata"):
+            st.error(f"❌ {rag['hata']}")
+        else:
+            karar = rag.get("karar", "")
+            uzlasma = rag.get("kaynak_uzlasmasi", 0)
+
+            if karar == "Doğrulandı":
+                renk, ikon = "#4ade80", "✅"
+            elif karar in ["Kısmen Doğrulandı", "Çelişkili"]:
+                renk, ikon = "#facc15", "⚠️"
+            else:
+                renk, ikon = "#f87171", "❌"
+
+            # Ana sonuç kartı
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {renk};margin-bottom:1rem">
+<div style="color:{renk};font-size:1.3rem;font-weight:700">
+{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.9rem;margin-top:6px">
+Kaynak Uzlaşması: %{uzlasma} · 
+{rag.get('bulunan_kaynak_sayisi', 0)} kaynak tarandı · 
+{rag.get('indekslenen_haber', 0)} haber indekslendi</div>
+<div style="color:#e2d9f3;font-size:0.95rem;margin-top:10px;font-style:italic">
+{rag.get('ana_bulgu', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            # Detaylar — 2 sütun
+            rag_col1, rag_col2 = st.columns(2)
+
+            with rag_col1:
+                if rag.get("destekleyen_kaynaklar"):
+                    st.markdown("**✅ Destekleyen Kaynaklar:**")
+                    for k in rag["destekleyen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+
+                if rag.get("eksik_bilgiler"):
+                    st.markdown("**⚠️ Kaynaklarda Olmayan İddialar:**")
+                    for e in rag["eksik_bilgiler"]:
+                        st.markdown(f"• {e}")
+
+            with rag_col2:
+                if rag.get("celen_kaynaklar"):
+                    st.markdown("**❌ Çelişen Kaynaklar:**")
+                    for k in rag["celen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+
+                etki = rag.get("guvenirlilk_etkisi", 0)
+                isaret = "+" if etki >= 0 else ""
+                etki_renk = "#4ade80" if etki >= 0 else "#f87171"
+                st.markdown(f"**Güvenilirlik Etkisi:** "
+                            f"<span style='color:{etki_renk}'>{isaret}{etki}</span>",
+                            unsafe_allow_html=True)
+
+            if rag.get("ozet"):
+                st.info(rag["ozet"])
+
+            # Kullanılan Multi-Query sorgularını göster
+            if rag.get("kullanilan_sorgular"):
+                with st.expander("🔍 Multi-Query Retrieval — Kullanılan Sorgular"):
+                    st.caption("RAG pipeline bu 3 farklı sorguyla ChromaDB'de arama yaptı:")
+                    for i, sorgu in enumerate(rag["kullanilan_sorgular"], 1):
+                        st.markdown(f"`{i}.` {sorgu}")
+
+            # Kaynak linkleri
+            if rag.get("kaynak_linkleri"):
+                with st.expander(f"📰 Taranan Kaynaklar ({len(rag['kaynak_linkleri'])} haber)"):
+                    for link in rag["kaynak_linkleri"]:
+                        st.markdown(f"""
+**{link['baslik']}**  
+🗞️ {link['kaynak']} · 📅 {link['tarih']}  
+🔗 [{link['url'][:60]}...]({link['url']})
+""")
 elif st.session_state.get("last_report") is not None and news_text_clean:
     st.info("ℹ️ Metin değişti. Yeniden 'Gerçeği Sorgula'ya bas.")
+    # ── RAG Çapraz Kaynak Doğrulama ──────────────────────────────────
+if news_text_clean:
+    st.divider()
+    st.markdown("## 🔗 Çapraz Kaynak Doğrulama")
+    st.caption("RAG Pipeline: Indexing → Query Translation (Multi-Query + HyDE) → Routing → Retrieval → Generation")
+
+    if st.button("🧠 Kaynakları Tara ve Doğrula", use_container_width=True):
+        with st.spinner("Haberler indeksleniyor, kaynaklar karşılaştırılıyor..."):
+            from services.rag_pipeline import capraz_kaynak_dogrula
+            rag_sonuc = capraz_kaynak_dogrula(news_text_clean)
+            st.session_state["rag_sonuc"] = rag_sonuc
+
+    if st.session_state.get("rag_sonuc"):
+        rag = st.session_state["rag_sonuc"]
+
+        if rag.get("hata"):
+            st.error(f"❌ {rag['hata']}")
+        else:
+            karar = rag.get("karar", "")
+            uzlasma = rag.get("kaynak_uzlasmasi", 0)
+
+            if karar == "Doğrulandı":
+                renk, ikon = "#4ade80", "✅"
+            elif karar in ["Kısmen Doğrulandı", "Çelişkili"]:
+                renk, ikon = "#facc15", "⚠️"
+            else:
+                renk, ikon = "#f87171", "❌"
+
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {renk};margin-bottom:1rem">
+<div style="color:{renk};font-size:1.3rem;font-weight:700">
+{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.9rem;margin-top:6px">
+Kaynak Uzlaşması: %{uzlasma} · 
+{rag.get('bulunan_kaynak_sayisi', 0)} kaynak tarandı · 
+{rag.get('indekslenen_haber', 0)} haber indekslendi · 
+Konu: {rag.get('tespit_edilen_konu', '?')}</div>
+<div style="color:#e2d9f3;font-size:0.95rem;margin-top:10px;font-style:italic">
+{rag.get('ana_bulgu', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            rag_col1, rag_col2 = st.columns(2)
+
+            with rag_col1:
+                if rag.get("destekleyen_kaynaklar"):
+                    st.markdown("**✅ Destekleyen Kaynaklar:**")
+                    for k in rag["destekleyen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+                if rag.get("eksik_bilgiler"):
+                    st.markdown("**⚠️ Kaynaklarda Olmayan İddialar:**")
+                    for e in rag["eksik_bilgiler"]:
+                        st.markdown(f"• {e}")
+
+            with rag_col2:
+                if rag.get("celen_kaynaklar"):
+                    st.markdown("**❌ Çelişen Kaynaklar:**")
+                    for k in rag["celen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+                etki = rag.get("guvenirlilk_etkisi", 0)
+                isaret = "+" if etki >= 0 else ""
+                etki_renk = "#4ade80" if etki >= 0 else "#f87171"
+                st.markdown(
+                    f"**Güvenilirlik Etkisi:** "
+                    f"<span style='color:{etki_renk}'>{isaret}{etki}</span>",
+                    unsafe_allow_html=True
+                )
+
+            if rag.get("ozet"):
+                st.info(rag["ozet"])
+
+            # Multi-Query + HyDE sorgularını göster — portfolyo için
+            with st.expander("🔍 RAG Pipeline Detayları"):
+                st.caption("**Multi-Query Retrieval** — üretilen sorgular:")
+                for i, sorgu in enumerate(rag.get("kullanilan_sorgular", []), 1):
+                    st.markdown(f"`{i}.` {sorgu}")
+                if rag.get("hyde_sorgu"):
+                    st.caption("**HyDE** — varsayımsal belge:")
+                    st.markdown(f"_{rag['hyde_sorgu']}_")
+                if rag.get("indekslenen_kaynaklar"):
+                    st.caption("**İndekslenen Kaynaklar:**")
+                    st.markdown(", ".join(rag["indekslenen_kaynaklar"]))
+
+            if rag.get("kaynak_linkleri"):
+                with st.expander(f"📰 Taranan Haberler ({len(rag['kaynak_linkleri'])} kaynak)"):
+                    for link in rag["kaynak_linkleri"]:
+                        st.markdown(f"""
+**{link['baslik']}**  
+🗞️ {link['kaynak']} · 📅 {link['tarih']}  
+🔗 [{link['url'][:60]}...]({link['url']})
+""")
