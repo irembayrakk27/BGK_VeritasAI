@@ -260,7 +260,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Session state ────────────────────────────────────────────────
-for key in ["last_report", "last_hash", "secili_gecmis", "url_metin", "url_metin_kullanildi", "gorsel_sonuc", "video_sonuc", "rag_sonuc"]:
+for key in ["last_report", "last_hash", "secili_gecmis", "url_metin", "url_metin_kullanildi", "gorsel_sonuc", "video_sonuc", "rag_sonuc", "guvenlik"]:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -470,6 +470,11 @@ current_hash = (
     if news_text_clean else None
 )
 
+# ── Güvenlik Taraması ─────────────────────────────────────────────
+if news_text_clean:
+    from services.security import guvenlik_tara
+    st.session_state["guvenlik"] = guvenlik_tara(news_text_clean)
+
 # ── Buton ────────────────────────────────────────────────────────
 if st.button("🔎 Gerçeği Sorgula", type="primary", use_container_width=True):
     if not news_text_clean:
@@ -582,6 +587,80 @@ Kaynak Uzlaşması: %{uzlasma} ·
 🗞️ {link['kaynak']} · 📅 {link['tarih']}  
 🔗 [{link['url'][:60]}...]({link['url']})
 """)
+                        
+  # ── Güvenlik & Açıklanabilirlik Raporu ───────────────────────────
+if st.session_state.get("guvenlik") and news_text_clean:
+    guv = st.session_state["guvenlik"]
+    st.divider()
+    st.markdown("## 🛡️ Güvenlik & Açıklanabilirlik Raporu")
+
+    st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {guv['renk']};margin-bottom:1rem">
+<div style="color:{guv['renk']};font-size:1.3rem;font-weight:700">
+{guv['ikon']} Güvenlik Durumu: {guv['seviye']}</div>
+<div style="color:#a855f7;font-size:0.85rem;margin-top:6px">
+{guv['karakter_sayisi']} karakter · ~{guv['token_tahmini']} token · 
+{guv['injection_sayisi']} injection kalıbı · 
+{guv['adversarial_sayisi']} adversarial kalıbı</div>
+<div style="color:#e2d9f3;font-size:0.9rem;margin-top:8px">{guv['oneri']}</div>
+</div>""", unsafe_allow_html=True)
+
+    if guv["bulgular"]:
+        st.markdown("#### 🔍 Tespit Edilen Tehditler")
+        for bulgu in guv["bulgular"]:
+            st.markdown(f"""
+<div style="background:#2d1b1b;border-left:4px solid #f87171;
+border-radius:8px;padding:0.7rem 1rem;margin:0.3rem 0">
+{bulgu['ikon']} <b>{bulgu['tip']}</b> — 
+<code style="color:#fca5a5">{bulgu['bulunan']}</code>
+</div>""", unsafe_allow_html=True)
+
+    if guv["anomaliler"]:
+        st.markdown("#### ⚠️ Anomaliler")
+        for a in guv["anomaliler"]:
+            st.warning(a)
+
+    if st.session_state.get("last_report"):
+        st.divider()
+        st.markdown("#### 📊 Güven Skoru Açıklanabilirliği")
+        st.caption("Her bileşen skora nasıl katkıda bulundu?")
+
+        from services.security import skor_acikla
+        aciklama = skor_acikla(
+            news_text_clean,
+            st.session_state["last_report"],
+            st.session_state.get("rag_sonuc"),
+        )
+
+        as_ = aciklama["aciklanabilir_skor"]
+        as_renk = "#4ade80" if as_ >= 70 else "#facc15" if as_ >= 40 else "#f87171"
+        st.markdown(f"""
+<div style="text-align:center;background:#1e1b4b;border-radius:12px;
+padding:1rem;border:2px solid {as_renk};margin-bottom:1rem">
+<div style="color:#a855f7;font-size:0.9rem">Açıklanabilir Güven Skoru</div>
+<div style="color:{as_renk};font-size:2.5rem;font-weight:800">%{as_}</div>
+</div>""", unsafe_allow_html=True)
+
+        b1, b2 = st.columns(2)
+        b3, b4 = st.columns(2)
+        for i, bilesen in enumerate([b1, b2, b3, b4]):
+            with bilesen:
+                bl = aciklama["bilesenler"][i]
+                notlar_html = "".join(
+                    f'<div style="color:#e2d9f3;font-size:0.75rem;margin-top:3px">{n}</div>'
+                    for n in bl["notlar"]
+                )
+                st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:12px;padding:0.9rem;
+border:2px solid {bl['renk']};margin-bottom:0.5rem">
+<div style="color:{bl['renk']};font-size:1.1rem;font-weight:700">
+{bl['ikon']} {bl['ad']}</div>
+<div style="color:#a855f7;font-size:0.8rem">Ağırlık: {bl['agirlik']}</div>
+<div style="color:{bl['renk']};font-size:1.8rem;font-weight:800;margin:0.3rem 0">
+%{bl['skor']}</div>
+{notlar_html}
+</div>""", unsafe_allow_html=True)                      
 elif st.session_state.get("last_report") is not None and news_text_clean:
     st.info("ℹ️ Metin değişti. Yeniden 'Gerçeği Sorgula'ya bas.")
     # ── RAG Çapraz Kaynak Doğrulama ──────────────────────────────────
