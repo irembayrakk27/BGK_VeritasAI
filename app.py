@@ -1,473 +1,756 @@
 """
-VeritasAI Core V2
-Groq (xAI) odakli manuel ReAct dongusu ile otomatik haber dogrulama.
+VeritasAI — Kalıcı sohbet geçmişi + sol sidebar.
 """
 
-from __future__ import annotations
+import hashlib
+import json
+from datetime import datetime
+from pathlib import Path
 
-import os
-import re
-from typing import Callable
+import streamlit as st
+from dotenv import load_dotenv
+
+from services.analysis import analyze_news_text
 
 import requests
-import streamlit as st
 from bs4 import BeautifulSoup
-from dotenv import load_dotenv
-from groq import Groq
 
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
-load_dotenv()
-
-
-SYSTEM_PROMPT: str = """
-Sen VeritasAI Core V2 agentisin.
-Amaç: Haber doğrulama için Manuel ReAct döngüsü işletmek.
-
-KURALLAR:
-1) Her yanıt aşağıdaki formatta olmalı:
-Thought: ...
-Action: ...
-Action Input: ...
-
-2) Kullanılabilir Action değerleri:
-- url_metne_cevir
-- guvenlik_tara
-- haber_dogrula
-- video_analiz
-- gorsel_analiz
-
-3) Uygun adımları tamamladıktan sonra yalnızca şu formatı ver:
-Final Answer: Profesyonel haber analiz raporu...
-
-4) Türkçe yaz.
-5) Güven Skoru 0-100 aralığında olmalı.
-6) Final raporda tam olarak 3 gerekçe ver.
-7) Reuters ve AP gibi güvenilir ajanslara atıf yap.
-"""
-
-
-def inject_css() -> None:
-    """Koyu tema ve grid arka plan CSS enjekte eder."""
-    st.markdown(
-        """
-<style>
-.stApp {
-    background-color: #0b1020;
-    background-image:
-        linear-gradient(rgba(99, 102, 241, 0.12) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(99, 102, 241, 0.12) 1px, transparent 1px);
-    background-size: 28px 28px;
-    color: #e5e7eb;
-}
-.main-title {
-    font-size: 2rem;
-    font-weight: 800;
-    color: #f9fafb;
-    margin-bottom: 0.2rem;
-}
-.sub-title {
-    color: #9ca3af;
-    margin-bottom: 1.2rem;
-}
-.card {
-    background: linear-gradient(180deg, #111827 0%, #0f172a 100%);
-    border: 1px solid #374151;
-    border-radius: 14px;
-    padding: 14px;
-    margin-bottom: 12px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-}
-.flow-box {
-    background: #020617;
-    border: 1px solid #334155;
-    border-radius: 10px;
-    min-height: 360px;
-    max-height: 460px;
-    overflow-y: auto;
-    padding: 12px;
-    font-family: Consolas, "Courier New", monospace;
-    font-size: 0.86rem;
-    white-space: pre-wrap;
-    color: #e2e8f0;
-}
-.status-chip {
-    display: inline-block;
-    padding: 6px 10px;
-    margin: 4px 6px 4px 0;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 700;
-}
-.chip-active {
-    color: #bbf7d0;
-    border: 1px solid #16a34a;
-    background: rgba(22, 163, 74, 0.15);
-}
-.chip-disabled {
-    color: #cbd5e1;
-    border: 1px solid #64748b;
-    background: rgba(100, 116, 139, 0.15);
-}
-.report {
-    background: linear-gradient(160deg, #111827 0%, #1f2937 100%);
-    border: 1px solid #374151;
-    border-radius: 12px;
-    padding: 14px;
-    line-height: 1.55;
-    color: #e5e7eb;
-}
-div.stButton > button {
-    background: #111827;
-    color: #f3f4f6;
-    border: 1px solid #4b5563;
-    border-radius: 10px;
-    font-weight: 700;
-}
-div.stButton > button:hover {
-    border: 1px solid #818cf8;
-    color: #c7d2fe;
-}
-</style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def initialize_session() -> None:
-    """Session state alanlarini baslatir."""
-    defaults: dict[str, object] = {
-        "source_mode": "text",
-        "react_logs": [],
-        "final_report": "",
-        "analysis_input": "",
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-
-def call_groq(messages: list[dict[str, str]]) -> str:
-    """Groq API cagrisi yapar, hata durumunda fallback dondurur."""
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return (
-            "Thought: API anahtari yok, emniyetli fallback kullanacagim.\n"
-            "Action: haber_dogrula\n"
-            "Action Input: fallback"
-        )
-
+def url_den_metin_cek(url:str) -> str:
+    "Verilen URL'den haber metnini çeker ve temizler."
     try:
-        client = Groq(api_key=api_key)
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            temperature=0.1,
-            max_tokens=700,
-        )
-        return (response.choices[0].message.content or "").strip()
-    except Exception:
-        return (
-            "Thought: API cevabi alinamadi, deterministic fallback calisacak.\n"
-            "Action: haber_dogrula\n"
-            "Action Input: fallback"
-        )
-
-
-def action_url_metne_cevir(action_input: str) -> str:
-    """URL metnini ceker ve temizler."""
-    try:
+         # Tarayıcı gibi davran, yoksa bazı siteler 403 verir
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
             )
         }
-        response = requests.get(action_input.strip(), headers=headers, timeout=12)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # 404, 403 gibi hataları yakala
+
+        soup = BeautifulSoup(response.text, "lxml")
+
+        # Navigasyon, footer, reklam gibi gürültüyü temizle
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
-        container = soup.find("article") or soup.find("main") or soup.find("body") or soup
-        text = container.get_text(separator=" ", strip=True)
-        cleaned = re.sub(r"\s+", " ", text).strip()
-        return f"URL metne cevrildi. Uzunluk: {len(cleaned)} karakter. Icerik: {cleaned[:1800]}"
-    except Exception as exc:
-        return f"URL cevirme hatasi: {exc}"
 
+        # Önce <article> dene (haber siteleri genelde bunu kullanır)
+        # Yoksa <main>, o da yoksa tüm sayfa
+        article = soup.find("article") or soup.find("main") or soup
 
-def action_guvenlik_tara(action_input: str) -> str:
-    """Basit guvenlik taramasi yapar."""
-    text = action_input.lower()
-    red_flags = ["ignore previous", "system prompt", "jailbreak", "bypass", "inject"]
-    hit_count = sum(1 for token in red_flags if token in text)
-    risk = "Dusuk" if hit_count == 0 else "Orta" if hit_count == 1 else "Yuksek"
-    return f"Girdi guvenlik taramasi tamamlandi. Risk: {risk}. Supheli kalip sayisi: {hit_count}."
+        # Sadece gerçek paragrafları al (40 karakterden kısa olanlar
+        # genelde menü linkleri veya etiketlerdir, onları at)
+        paragraflar = article.find_all("p")
+        metin = " ".join(
+            p.get_text(strip=True)
+            for p in paragraflar
+            if len(p.get_text(strip=True)) > 40
+        )
 
+        # Hiç paragraf bulunamazsa ham metni al
+        if not metin:
+            metin = soup.get_text(separator=" ", strip=True)
 
-def action_haber_dogrula(action_input: str) -> str:
-    """Final rapor hazirlamak icin ara gozlem dondurur."""
-    snippet = action_input[:800]
-    return (
-        "Haber dogrulama adimi calisti. Reuters/AP capraz kontrolu oneriliyor. "
-        f"Islenen icerik ozeti: {snippet}"
-    )
+        # Groq'un token limitine karşı 3000 karakterde kes
+        return metin[:3000]
 
+    except requests.exceptions.Timeout:
+        return "HATA: Sayfa 10 saniyede yanıt vermedi."
+    except requests.exceptions.ConnectionError:
+        return "HATA: URL'e erişilemedi, linki kontrol et."
+    except Exception as e:
+        return f"HATA: {e}"
 
-def action_video_analiz(_: str) -> str:
-    """Video analiz mock cevabi."""
-    return "Video Icerigi: Siyasi miting, ses analizi yapiliyor."
+# ── Geçmiş dosya yolu ────────────────────────────────────────────
+GECMIS_DOSYA = Path(__file__).resolve().parent / "data" / "gecmis.json"
+GECMIS_DOSYA.parent.mkdir(exist_ok=True)
 
+def gecmis_yukle():
+    if GECMIS_DOSYA.exists():
+        with open(GECMIS_DOSYA, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
 
-def action_gorsel_analiz(_: str) -> str:
-    """Gorsel analiz mock cevabi."""
-    return "Gorsel: Bir haber gorseli, manipulasyon yok."
+def gecmis_kaydet(gecmis):
+    with open(GECMIS_DOSYA, "w", encoding="utf-8") as f:
+        json.dump(gecmis, f, ensure_ascii=False, indent=2)
 
+def gecmise_ekle(metin, rapor):
+    gecmis = gecmis_yukle()
+    kayit = {
+        "id": len(gecmis) + 1,
+        "tarih": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "metin_ozet": metin[:60] + "..." if len(metin) > 60 else metin,
+        "skor": rapor.get("skor", 0),
+        "rapor": rapor,
+    }
+    gecmis.insert(0, kayit)
+    gecmis = gecmis[:50]
+    gecmis_kaydet(gecmis)
+    return gecmis
 
-def parse_action_block(llm_text: str) -> tuple[str, str, str]:
-    """Thought/Action/Action Input bloklarini regex ile parse eder."""
-    thought_match = re.search(r"Thought:\s*(.+?)(?=\nAction:|$)", llm_text, re.DOTALL)
-    action_match = re.search(r"Action:\s*([a-zA-Z_]+)", llm_text)
-    action_input_match = re.search(r"Action Input:\s*(.+)", llm_text, re.DOTALL)
+# ── Rapor gösterme fonksiyonu ─────────────────────────────────────
+def rapor_goster(report):
+    skor = report.get("skor", 50)
 
-    thought = thought_match.group(1).strip() if thought_match else ""
-    action = action_match.group(1).strip() if action_match else ""
-    action_input = action_input_match.group(1).strip() if action_input_match else ""
-    return thought, action, action_input
+    if skor >= 80:
+        css_sinif, etiket = "skor-yesil", "✅ Güvenilir"
+    elif skor >= 50:
+        css_sinif, etiket = "skor-sari", "⚠️ Şüpheli"
+    else:
+        css_sinif, etiket = "skor-kirmizi", "❌ Güvenilmez"
 
+    st.markdown(f"""
+    <div class="skor-kutu {css_sinif}">
+        {etiket}<br>
+        <span style="font-size:1.2rem">Güvenilirlik Skoru</span><br>
+        %{skor}
+    </div>
+    """, unsafe_allow_html=True)
 
-def build_final_report_from_observations(observations: list[str], source_mode: str) -> str:
-    """Fallback olarak profesyonel final rapor metni olusturur."""
-    base_score = 95 if source_mode == "url" else 88
-    if source_mode == "video":
-        base_score = 84
-    if source_mode == "image":
-        base_score = 90
+    st.progress(skor / 100)
 
-    return (
-        "Haber Analiz Sonucu\n"
-        f"Güven Skoru: {base_score}/100\n"
-        "Karar: Haber güvenilirdir. Manipülasyon tespit edilmedi.\n"
-        "Gerekçeler:\n"
-        "1) İçerik iddiaları Reuters/AP gibi güvenilir ajans anlatımıyla çelişmiyor.\n"
-        "2) Metin/görsel/video bağlamında belirgin dezenformasyon veya manipülasyon izi görülmedi.\n"
-        "3) Dilsel ve yapısal incelemede yüksek riskli yönlendirme kalıpları sınırlı bulundu.\n"
-        f"Teknik Not: {' | '.join(observations[-3:])}"
-    )
+    st.markdown("### 🔎 Detay Analiz")
+    dcol1, dcol2 = st.columns(2)
 
+    with dcol1:
+        manipulasyon = report.get("manipulasyon", "Tespit edilmedi")
+        renk = "#f87171" if manipulasyon.lower() != "tespit edilmedi" else "#4ade80"
+        st.markdown(f"""
+        <div class="bilgi-kart">
+            <div class="bilgi-baslik">⚠️ Manipülasyon Tekniği</div>
+            <div class="bilgi-deger" style="color:{renk}">{manipulasyon}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-def run_manual_react(user_input: str, source_mode: str) -> tuple[str, str]:
-    """Manuel ReAct dongusunu calistirir ve (akıs_logu, final_rapor) dondurur."""
-    tools: dict[str, Callable[[str], str]] = {
-        "url_metne_cevir": action_url_metne_cevir,
-        "guvenlik_tara": action_guvenlik_tara,
-        "haber_dogrula": action_haber_dogrula,
-        "video_analiz": action_video_analiz,
-        "gorsel_analiz": action_gorsel_analiz,
+    with dcol2:
+        kaynak = report.get("kaynak_kalitesi", "Bilinmiyor")
+        if "güçlü" in kaynak.lower():
+            kaynak_renk = "#4ade80"
+        elif "orta" in kaynak.lower():
+            kaynak_renk = "#facc15"
+        else:
+            kaynak_renk = "#f87171"
+        st.markdown(f"""
+        <div class="bilgi-kart">
+            <div class="bilgi-baslik">📰 Kaynak Kalitesi</div>
+            <div class="bilgi-deger" style="color:{kaynak_renk}">{kaynak}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if report.get("gerekceler"):
+        st.markdown("### 📌 Gerekçeler")
+        ikonlar = ["1️⃣", "2️⃣", "3️⃣"]
+        for i, g in enumerate(report["gerekceler"]):
+            st.markdown(f"""
+            <div class="gerekcekart">{ikonlar[i]} {g}</div>
+            """, unsafe_allow_html=True)
+
+    if report.get("ozet"):
+        st.markdown("### 💬 Genel Değerlendirme")
+        st.info(report["ozet"])
+
+    if report.get("kaynaklar"):
+        st.markdown("### 🔗 İlgili Kaynaklar")
+        for kaynak in report["kaynaklar"]:
+            st.markdown(f"""
+            <div class="gerekcekart">
+                <b>📰 {kaynak.get('title', 'Kaynak')}</b><br>
+                <small>{kaynak.get('content', '')[:200]}...</small><br>
+                <a href="{kaynak.get('url', '#')}" target="_blank"
+                   style="color:#a855f7;">🔗 Kaynağa Git</a>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.set_page_config(
+    page_title="VeritasAI — Ana Sayfa",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ── Tema ─────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+    .stApp {
+        background: linear-gradient(135deg, #0d0d2b 0%, #1a0533 100%);
+    }
+    h1 { color: #c084fc !important; font-size: 2.8rem !important; }
+    h2, h3 { color: #a855f7 !important; }
+    p, label, .stMarkdown { color: #e2d9f3 !important; }
+
+    .stButton > button {
+        background: linear-gradient(90deg, #7c3aed, #4f46e5) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 12px !important;
+        font-size: 1.1rem !important;
+        font-weight: 700 !important;
+        padding: 0.75rem !important;
+    }
+    .stButton > button:hover { opacity: 0.85; }
+
+    .stTextArea textarea {
+        background: #1e1b4b !important;
+        color: #e2d9f3 !important;
+        border: 1px solid #7c3aed !important;
+        border-radius: 10px !important;
     }
 
-    # Baslangic adimi: secili moda gore zorunlu action
-    forced_action = ""
-    if source_mode == "video":
-        forced_action = "video_analiz"
-    elif source_mode == "image":
-        forced_action = "gorsel_analiz"
-    elif source_mode == "url":
-        forced_action = "url_metne_cevir"
+    .skor-kutu {
+        border-radius: 16px;
+        padding: 1.5rem;
+        text-align: center;
+        font-size: 3rem;
+        font-weight: 900;
+        margin: 1rem 0;
+    }
+    .skor-yesil   { background: #052e16; color: #4ade80; border: 2px solid #4ade80; }
+    .skor-sari    { background: #1c1700; color: #facc15; border: 2px solid #facc15; }
+    .skor-kirmizi { background: #1f0707; color: #f87171; border: 2px solid #f87171; }
 
-    messages: list[dict[str, str]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                f"Girdi tipi: {source_mode}\n"
-                f"Girdi: {user_input}\n"
-                f"Zorunlu ilk aksiyon: {forced_action if forced_action else 'yok'}"
-            ),
-        },
-    ]
+    .gerekcekart {
+        background: #1e1b4b;
+        border-left: 4px solid #7c3aed;
+        border-radius: 8px;
+        padding: 0.8rem 1rem;
+        margin: 0.5rem 0;
+        color: #e2d9f3;
+    }
 
-    log_lines: list[str] = ["[AGENT DUSUNCE AKISI]"]
-    observations: list[str] = []
+    .bilgi-kart {
+        background: #1e1b4b;
+        border-radius: 12px;
+        padding: 1rem 1.2rem;
+        margin: 0.5rem 0;
+        color: #e2d9f3;
+        border: 1px solid #4f46e5;
+    }
+    .bilgi-baslik {
+        font-size: 0.8rem;
+        color: #a855f7;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 0.3rem;
+    }
+    .bilgi-deger {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: #e2d9f3;
+    }
 
-    for _ in range(8):
-        llm_text = call_groq(messages)
+    [data-testid="stSidebar"] {
+        background: #0d0d2b !important;
+        border-right: 1px solid #4f46e5;
+    }
+    .gecmis-kart {
+        background: #1e1b4b;
+        border-radius: 8px;
+        padding: 0.6rem 0.8rem;
+        margin: 0.4rem 0;
+        cursor: pointer;
+        border: 1px solid #4f46e5;
+    }
+    .gecmis-kart:hover { border-color: #a855f7; }
+</style>
+""", unsafe_allow_html=True)
 
-        if "Final Answer:" in llm_text:
-            final_answer = llm_text.split("Final Answer:", 1)[1].strip()
-            if not final_answer:
-                final_answer = build_final_report_from_observations(observations, source_mode)
-            return "\n".join(log_lines), final_answer
+# ── Session state ────────────────────────────────────────────────
+for key in ["last_report", "last_hash", "secili_gecmis", "url_metin", "url_metin_kullanildi", "gorsel_sonuc", "video_sonuc", "rag_sonuc", "guvenlik"]:
+    if key not in st.session_state:
+        st.session_state[key] = None
 
-        thought, action, action_input = parse_action_block(llm_text)
-        if forced_action and len(observations) == 0:
-            action = forced_action
-            if not action_input:
-                action_input = user_input
+# ── Sidebar ───────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🕒 Analiz Geçmişi")
+    st.divider()
 
-        if not action:
-            action = "haber_dogrula"
-            action_input = user_input
-            if thought == "":
-                thought = "Model aksiyon belirtmedi, guvenli fallback ile devam ediyorum."
+    gecmis = gecmis_yukle()
 
-        if action not in tools:
-            observation = f"Bilinmeyen action: {action}. haber_dogrula fallback uygulandi."
-            action = "haber_dogrula"
-            action_input = user_input
-            observation = tools[action](action_input)
-        else:
-            if not action_input:
-                action_input = user_input
-            observation = tools[action](action_input)
-
-        log_lines.append(f"Thought: {thought}")
-        log_lines.append(f"Action: {action}")
-        log_lines.append(f"Action Input: {action_input[:250]}")
-        log_lines.append(f"Observation: {observation}")
-        log_lines.append("-" * 56)
-        observations.append(observation)
-
-        messages.append({"role": "assistant", "content": llm_text})
-        messages.append(
-            {
-                "role": "user",
-                "content": f"Observation: {observation}\nDevam et ve gerekiyorsa yeni action sec.",
-            }
-        )
-
-    return "\n".join(log_lines), build_final_report_from_observations(observations, source_mode)
-
-
-def render_source_selector() -> str:
-    """Multimodal kaynak secicisini cizer."""
-    st.markdown("### Analiz Kaynağı Seç")
-    cols = st.columns(4)
-
-    with cols[0]:
-        if st.button("[TEXT ANALİZİ]", use_container_width=True):
-            st.session_state["source_mode"] = "text"
-    with cols[1]:
-        if st.button("https://lv.wikipedia.org/wiki/Anal%C4%ABze", use_container_width=True):
-            st.session_state["source_mode"] = "url"
-            st.session_state["analysis_input"] = "https://lv.wikipedia.org/wiki/Anal%C4%ABze"
-    with cols[2]:
-        if st.button("[VİDEO ANALİZİ]", use_container_width=True):
-            st.session_state["source_mode"] = "video"
-    with cols[3]:
-        if st.button("[GÖRSEL ANALİZİ]", use_container_width=True):
-            st.session_state["source_mode"] = "image"
-
-    return str(st.session_state["source_mode"])
-
-
-def render_input_area(source_mode: str) -> str:
-    """Secilen moda gore giris alanini gosterir."""
-    default_url = "https://www.haberler.com/gundem/cumhurbaskani-erdogan-son-dakika-aciklamasi-5421973.html"
-
-    if source_mode == "url":
-        return st.text_input(
-            "URL Girdisi",
-            value=st.session_state.get("analysis_input", default_url),
-            placeholder=default_url,
-        )
-    if source_mode == "video":
-        return st.text_input(
-            "Video URL Girdisi",
-            placeholder="https://www.youtube.com/watch?v=ornek_video",
-        )
-    if source_mode == "image":
-        uploaded = st.file_uploader("Gorsel Yukle", type=["png", "jpg", "jpeg", "webp"])
-        if uploaded is not None:
-            st.image(uploaded, caption="Yuklenen Gorsel", use_container_width=True)
-            return "Kullanici gorsel yukledi. Gorsel modu aktif."
-        return "Kullanici henuz gorsel yuklemedi."
-
-    return st.text_area(
-        "Metin Girdisi",
-        height=130,
-        placeholder="Doğrulanacak haber metnini buraya yazın...",
-    )
-
-
-def render_module_status(source_mode: str) -> None:
-    """Sag alt modul durum panelini cizer."""
-    url_active = "chip-active" if source_mode == "url" else "chip-disabled"
-    video_active = "chip-active" if source_mode == "video" else "chip-disabled"
-    image_active = "chip-active" if source_mode == "image" else "chip-disabled"
-
-    st.markdown("#### Döngü Modülleri Durumu")
-    st.markdown(
-        f"""
-<span class="status-chip {url_active}">URL-to-Text: {'Aktif' if source_mode == 'url' else 'Devre Disi'}</span>
-<span class="status-chip {video_active}">Video Analiz: {'Aktif' if source_mode == 'video' else 'Devre Disi'}</span>
-<span class="status-chip {image_active}">Gorsel Analiz: {'Aktif' if source_mode == 'image' else 'Devre Disi'}</span>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def main() -> None:
-    """Uygulama ana akisi."""
-    st.set_page_config(
-        page_title="ReAct Agent - Otomatik Haber Doğrulama (VeritasAI Core V2)",
-        page_icon="🧠",
-        layout="wide",
-    )
-    inject_css()
-    initialize_session()
-
-    st.markdown(
-        '<div class="main-title">ReAct Agent - Otomatik Haber Doğrulama (VeritasAI Core V2)</div>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        '<div class="sub-title">Groq (xAI) Manuel ReAct Döngüsü • Dış Bağımlılık Yok • Ultra-Hafif İşleme</div>',
-        unsafe_allow_html=True,
-    )
-
-    source_mode = render_source_selector()
-    user_input = render_input_area(source_mode)
-
-    start_clicked = st.button("Analizi Baslat", type="primary", use_container_width=True)
-
-    left_col, right_col = st.columns(2)
-
-    with left_col:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("#### Agent Düşünce Akışı")
-        flow_text = "\n".join(st.session_state.get("react_logs", []))
-        st.markdown(f'<div class="flow-box">{flow_text}</div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with right_col:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("#### Manuel ReAct Döngü Görüntüleyici")
-        flow_text = "\n".join(st.session_state.get("react_logs", []))
-        st.markdown(f'<div class="flow-box">{flow_text}</div>', unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        render_module_status(source_mode)
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    if start_clicked:
-        normalized_input = (user_input or "").strip()
-        if source_mode in {"text", "url", "video"} and not normalized_input:
-            st.warning("Lutfen analiz icin girdi saglayin.")
-        else:
-            with st.spinner("Manuel ReAct dongusu calisiyor..."):
-                flow_log, final_report = run_manual_react(normalized_input, source_mode)
-            st.session_state["react_logs"] = flow_log.splitlines()
-            st.session_state["final_report"] = final_report
+    if not gecmis:
+        st.info("Henüz analiz yapılmadı.")
+    else:
+        if st.button("🗑️ Geçmişi Temizle", use_container_width=True):
+            gecmis_kaydet([])
+            st.session_state["secili_gecmis"] = None
             st.rerun()
 
-    if st.session_state.get("final_report"):
-        st.markdown("### Haber Analiz Sonucu")
-        st.markdown(
-            f'<div class="report">{st.session_state["final_report"].replace(chr(10), "<br>")}</div>',
-            unsafe_allow_html=True,
+        st.markdown(f"**{len(gecmis)} analiz kayıtlı**")
+        st.markdown("")
+
+        for kayit in gecmis:
+            skor = kayit["skor"]
+            if skor >= 80:
+                skor_emoji = "🟢"
+            elif skor >= 50:
+                skor_emoji = "🟡"
+            else:
+                skor_emoji = "🔴"
+
+            if st.button(
+                f"{skor_emoji} %{skor} — {kayit['metin_ozet']}",
+                key=f"gecmis_{kayit['id']}",
+                use_container_width=True,
+            ):
+                st.session_state["secili_gecmis"] = kayit
+
+# ── Ana içerik ───────────────────────────────────────────────────
+st.markdown("# 🔍 VeritasAI")
+st.markdown("##### 🧠 Yapay zeka destekli haber doğrulama platformu")
+st.divider()
+
+if st.session_state["secili_gecmis"]:
+    kayit = st.session_state["secili_gecmis"]
+    st.info(f"📂 Geçmiş kayıt gösteriliyor — {kayit['tarih']}")
+    if st.button("✖️ Kapat"):
+        st.session_state["secili_gecmis"] = None
+        st.rerun()
+    rapor_goster(kayit["rapor"])
+    st.stop()
+
+# ── Input ────────────────────────────────────────────────────────
+# ── Video Analizi ─────────────────────────────────────────────────
+st.markdown("### 🎥 Video Analizi")
+video_url = st.text_input(
+    "video_url",
+    placeholder="🎥 YouTube linki yapıştır (opsiyonel)…",
+    label_visibility="collapsed",
+)
+
+if video_url and ("youtube.com" in video_url or "youtu.be" in video_url):
+    if st.button("▶️ Videoyu Analiz Et", use_container_width=False):
+        with st.spinner("Transcript çekiliyor ve analiz yapılıyor..."):
+            from services.video_analysis import video_analiz_et
+            video_sonuc = video_analiz_et(video_url)
+            st.session_state["video_sonuc"] = video_sonuc
+
+    if st.session_state.get("video_sonuc"):
+        vs = st.session_state["video_sonuc"]
+
+        if vs.get("hata"):
+            st.error(f"❌ {vs['hata']}")
+        else:
+            karar = vs.get("karar", "")
+            skor = vs.get("guven_skoru", 0)
+
+            # Renk kodu
+            if karar == "Güvenilir":
+                renk, ikon = "#4ade80", "✅"
+            elif karar == "Şüpheli":
+                renk, ikon = "#facc15", "⚠️"
+            else:
+                renk, ikon = "#f87171", "❌"
+
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:12px;padding:1rem;
+border:2px solid {renk};margin-bottom:1rem">
+<div style="color:{renk};font-size:1.2rem;font-weight:700">{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.85rem;margin-top:4px">
+Güven Skoru: %{skor} · Dil: {vs.get('dil', '?')}</div>
+<div style="color:#e2d9f3;font-size:0.85rem;margin-top:8px">
+{vs.get('ana_bulgu', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            if vs.get("gerekceler"):
+                st.markdown("**📌 Gerekçeler:**")
+                for g in vs["gerekceler"]:
+                    st.markdown(f"• {g}")
+
+            if vs.get("ozet"):
+                st.info(vs["ozet"])
+
+            if vs.get("transcript_ozet"):
+                with st.expander("📄 Transcript Önizleme"):
+                    st.caption(f"Kullanılan dil: {vs.get('dil', '?')}")
+                    st.write(vs["transcript_ozet"])
+
+st.divider()
+
+col1, col2 = st.columns([3, 1])
+
+with col1:
+    st.markdown("### 📝 Haber Metni veya URL")
+
+    # URL kutusu
+    haber_url = st.text_input(
+        "haber_url",
+        placeholder="🔗 Haber URL'si yapıştır (opsiyonel) — metin otomatik dolar…",
+        label_visibility="collapsed",
+    )
+
+    # Geçerli bir URL girilmişse butonu göster
+    if haber_url and haber_url.startswith("http"):
+        if st.button("🌐 URL'den Metni Çek"):
+            with st.spinner("Sayfa indiriliyor ve temizleniyor..."):
+                cekilen = url_den_metin_cek(haber_url)
+            if cekilen.startswith("HATA:"):
+                st.error(cekilen)
+            else:
+                st.session_state["url_metin"] = cekilen
+                st.success(f"✅ {len(cekilen)} karakter çekildi.")
+                st.rerun()  # text_area'yı hemen güncelle
+
+    # Text area — URL'den metin çekildiyse otomatik dolu gelir
+    news_text = st.text_area(
+        "Haber metni",
+        value=st.session_state.get("url_metin", ""),
+        height=220,
+        placeholder="Haberin tam metnini buraya yaz… ya da yukarıya URL yapıştır.",
+        label_visibility="collapsed",
+    )
+
+    # url_metin kullanıldı, bir sonraki rerun'da temizle
+    if st.session_state.get("url_metin_kullanildi"):
+        st.session_state["url_metin"] = ""
+        st.session_state["url_metin_kullanildi"] = False
+    elif st.session_state.get("url_metin"):
+        st.session_state["url_metin_kullanildi"] = True
+
+with col2:
+    st.markdown("### 🖼️ Görsel Analizi")
+    uploaded_image = st.file_uploader(
+        "Haber görseli",
+        type=["jpg", "jpeg", "png", "webp"],
+        label_visibility="collapsed",
+    )
+
+    if uploaded_image:
+        st.image(uploaded_image, caption="Yüklenen görsel", use_container_width=True)
+
+        if st.button("🔬 Görseli Analiz Et", use_container_width=True):
+            with st.spinner("Piksel analizi yapılıyor..."):
+                from services.image_analysis import gorsel_analiz_et
+                gorsel_bytes = uploaded_image.read()
+                gorsel_sonuc = gorsel_analiz_et(gorsel_bytes, uploaded_image.name)
+                st.session_state["gorsel_sonuc"] = gorsel_sonuc
+                st.rerun()
+
+        if st.session_state.get("gorsel_sonuc"):
+            g = st.session_state["gorsel_sonuc"]
+            karar = g.get("karar", "")
+            risk = g.get("risk_seviyesi", "")
+
+            # Renk kodu
+            if "Gerçek" in karar:
+                renk = "#4ade80"
+                ikon = "✅"
+            elif "AI" in karar:
+                renk = "#f87171"
+                ikon = "🤖"
+            elif "Manipüle" in karar:
+                renk = "#f87171"
+                ikon = "⚠️"
+            else:
+                renk = "#facc15"
+                ikon = "❓"
+
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:12px;padding:1rem;
+border:2px solid {renk};margin-top:0.5rem">
+<div style="color:{renk};font-size:1.1rem;font-weight:700">
+{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.85rem;margin-top:4px">
+Güven: %{g.get('guven_yuzdesi', 0)} · Risk: {risk}</div>
+<div style="color:#e2d9f3;font-size:0.85rem;margin-top:8px">
+{g.get('ana_sinyal', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            if g.get("detaylar"):
+                st.markdown("**Detaylar:**")
+                for d in g["detaylar"]:
+                    st.markdown(f"• {d}")
+# ── Hash ─────────────────────────────────────────────────────────
+news_text_clean = (news_text or "").strip()
+current_hash = (
+    hashlib.sha256(news_text_clean.encode("utf-8")).hexdigest()
+    if news_text_clean else None
+)
+
+# ── Güvenlik Taraması ─────────────────────────────────────────────
+if news_text_clean:
+    from services.security import guvenlik_tara
+    st.session_state["guvenlik"] = guvenlik_tara(news_text_clean)
+
+# ── Buton ────────────────────────────────────────────────────────
+if st.button("🔎 Gerçeği Sorgula", type="primary", use_container_width=True):
+    if not news_text_clean:
+        st.warning("⚠️ Lütfen analiz için bir haber metni girin.")
+    else:
+        try:
+            cached = (
+                current_hash
+                and st.session_state.get("last_hash") == current_hash
+                and st.session_state.get("last_report") is not None
+            )
+            if cached:
+                st.success("✅ Aynı metin: önbellekten gösteriliyor.")
+            else:
+                with st.spinner("🤖 Çift aşamalı analiz yapılıyor... (1/2 ön analiz → 2/2 derin analiz)"):
+                    report = analyze_news_text(
+                        news_text_clean, language="tr", max_retries=1
+                    )
+                st.session_state["last_report"] = report
+                st.session_state["last_hash"] = current_hash
+                gecmise_ekle(news_text_clean, report)
+                st.success("✅ Analiz tamamlandı!")
+        except Exception as e:
+            st.error(f"❌ API bağlantı hatası: {e}")
+
+# ── Sonuç ────────────────────────────────────────────────────────
+if (
+    current_hash
+    and st.session_state.get("last_report") is not None
+    and st.session_state.get("last_hash") == current_hash
+):
+    st.divider()
+    st.markdown("## 📊 Analiz Sonucu")
+    rapor_goster(st.session_state["last_report"])
+
+
+    if st.session_state.get("rag_sonuc"):
+        rag = st.session_state["rag_sonuc"]
+
+        if rag.get("hata"):
+            st.error(f"❌ {rag['hata']}")
+        else:
+            karar = rag.get("karar", "")
+            uzlasma = rag.get("kaynak_uzlasmasi", 0)
+
+            if karar == "Doğrulandı":
+                renk, ikon = "#4ade80", "✅"
+            elif karar in ["Kısmen Doğrulandı", "Çelişkili"]:
+                renk, ikon = "#facc15", "⚠️"
+            else:
+                renk, ikon = "#f87171", "❌"
+
+            # Ana sonuç kartı
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {renk};margin-bottom:1rem">
+<div style="color:{renk};font-size:1.3rem;font-weight:700">
+{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.9rem;margin-top:6px">
+Kaynak Uzlaşması: %{uzlasma} · 
+{rag.get('bulunan_kaynak_sayisi', 0)} kaynak tarandı · 
+{rag.get('indekslenen_haber', 0)} haber indekslendi</div>
+<div style="color:#e2d9f3;font-size:0.95rem;margin-top:10px;font-style:italic">
+{rag.get('ana_bulgu', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            # Detaylar — 2 sütun
+            rag_col1, rag_col2 = st.columns(2)
+
+            with rag_col1:
+                if rag.get("destekleyen_kaynaklar"):
+                    st.markdown("**✅ Destekleyen Kaynaklar:**")
+                    for k in rag["destekleyen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+
+                if rag.get("eksik_bilgiler"):
+                    st.markdown("**⚠️ Kaynaklarda Olmayan İddialar:**")
+                    for e in rag["eksik_bilgiler"]:
+                        st.markdown(f"• {e}")
+
+            with rag_col2:
+                if rag.get("celen_kaynaklar"):
+                    st.markdown("**❌ Çelişen Kaynaklar:**")
+                    for k in rag["celen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+
+                etki = rag.get("guvenirlilk_etkisi", 0)
+                isaret = "+" if etki >= 0 else ""
+                etki_renk = "#4ade80" if etki >= 0 else "#f87171"
+                st.markdown(f"**Güvenilirlik Etkisi:** "
+                            f"<span style='color:{etki_renk}'>{isaret}{etki}</span>",
+                            unsafe_allow_html=True)
+
+            if rag.get("ozet"):
+                st.info(rag["ozet"])
+
+            # Kullanılan Multi-Query sorgularını göster
+            if rag.get("kullanilan_sorgular"):
+                with st.expander("🔍 Multi-Query Retrieval — Kullanılan Sorgular"):
+                    st.caption("RAG pipeline bu 3 farklı sorguyla ChromaDB'de arama yaptı:")
+                    for i, sorgu in enumerate(rag["kullanilan_sorgular"], 1):
+                        st.markdown(f"`{i}.` {sorgu}")
+
+            # Kaynak linkleri
+            if rag.get("kaynak_linkleri"):
+                with st.expander(f"📰 Taranan Kaynaklar ({len(rag['kaynak_linkleri'])} haber)"):
+                    for link in rag["kaynak_linkleri"]:
+                        st.markdown(f"""
+**{link['baslik']}**  
+🗞️ {link['kaynak']} · 📅 {link['tarih']}  
+🔗 [{link['url'][:60]}...]({link['url']})
+""")
+                        
+  # ── Güvenlik & Açıklanabilirlik Raporu ───────────────────────────
+if st.session_state.get("guvenlik") and news_text_clean:
+    guv = st.session_state["guvenlik"]
+    st.divider()
+    st.markdown("## 🛡️ Güvenlik & Açıklanabilirlik Raporu")
+
+    st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {guv['renk']};margin-bottom:1rem">
+<div style="color:{guv['renk']};font-size:1.3rem;font-weight:700">
+{guv['ikon']} Güvenlik Durumu: {guv['seviye']}</div>
+<div style="color:#a855f7;font-size:0.85rem;margin-top:6px">
+{guv['karakter_sayisi']} karakter · ~{guv['token_tahmini']} token · 
+{guv['injection_sayisi']} injection kalıbı · 
+{guv['adversarial_sayisi']} adversarial kalıbı</div>
+<div style="color:#e2d9f3;font-size:0.9rem;margin-top:8px">{guv['oneri']}</div>
+</div>""", unsafe_allow_html=True)
+
+    if guv["bulgular"]:
+        st.markdown("#### 🔍 Tespit Edilen Tehditler")
+        for bulgu in guv["bulgular"]:
+            st.markdown(f"""
+<div style="background:#2d1b1b;border-left:4px solid #f87171;
+border-radius:8px;padding:0.7rem 1rem;margin:0.3rem 0">
+{bulgu['ikon']} <b>{bulgu['tip']}</b> — 
+<code style="color:#fca5a5">{bulgu['bulunan']}</code>
+</div>""", unsafe_allow_html=True)
+
+    if guv["anomaliler"]:
+        st.markdown("#### ⚠️ Anomaliler")
+        for a in guv["anomaliler"]:
+            st.warning(a)
+
+    if st.session_state.get("last_report"):
+        st.divider()
+        st.markdown("#### 📊 Güven Skoru Açıklanabilirliği")
+        st.caption("Her bileşen skora nasıl katkıda bulundu?")
+
+        from services.security import skor_acikla
+        aciklama = skor_acikla(
+            news_text_clean,
+            st.session_state["last_report"],
+            st.session_state.get("rag_sonuc"),
         )
 
+        as_ = aciklama["aciklanabilir_skor"]
+        as_renk = "#4ade80" if as_ >= 70 else "#facc15" if as_ >= 40 else "#f87171"
+        st.markdown(f"""
+<div style="text-align:center;background:#1e1b4b;border-radius:12px;
+padding:1rem;border:2px solid {as_renk};margin-bottom:1rem">
+<div style="color:#a855f7;font-size:0.9rem">Açıklanabilir Güven Skoru</div>
+<div style="color:{as_renk};font-size:2.5rem;font-weight:800">%{as_}</div>
+</div>""", unsafe_allow_html=True)
 
-if __name__ == "__main__":
-    main()
+        b1, b2 = st.columns(2)
+        b3, b4 = st.columns(2)
+        for i, bilesen in enumerate([b1, b2, b3, b4]):
+            with bilesen:
+                bl = aciklama["bilesenler"][i]
+                notlar_html = "".join(
+                    f'<div style="color:#e2d9f3;font-size:0.75rem;margin-top:3px">{n}</div>'
+                    for n in bl["notlar"]
+                )
+                st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:12px;padding:0.9rem;
+border:2px solid {bl['renk']};margin-bottom:0.5rem">
+<div style="color:{bl['renk']};font-size:1.1rem;font-weight:700">
+{bl['ikon']} {bl['ad']}</div>
+<div style="color:#a855f7;font-size:0.8rem">Ağırlık: {bl['agirlik']}</div>
+<div style="color:{bl['renk']};font-size:1.8rem;font-weight:800;margin:0.3rem 0">
+%{bl['skor']}</div>
+{notlar_html}
+</div>""", unsafe_allow_html=True)                      
+elif st.session_state.get("last_report") is not None and news_text_clean:
+    st.info("ℹ️ Metin değişti. Yeniden 'Gerçeği Sorgula'ya bas.")
+    # ── RAG Çapraz Kaynak Doğrulama ──────────────────────────────────
+if news_text_clean:
+    st.divider()
+    st.markdown("## 🔗 Çapraz Kaynak Doğrulama")
+    st.caption("RAG Pipeline: Indexing → Query Translation (Multi-Query + HyDE) → Routing → Retrieval → Generation")
+
+    if st.button("🧠 Kaynakları Tara ve Doğrula", use_container_width=True):
+        with st.spinner("Haberler indeksleniyor, kaynaklar karşılaştırılıyor..."):
+            from services.rag_pipeline import capraz_kaynak_dogrula
+            rag_sonuc = capraz_kaynak_dogrula(news_text_clean)
+            st.session_state["rag_sonuc"] = rag_sonuc
+
+    if st.session_state.get("rag_sonuc"):
+        rag = st.session_state["rag_sonuc"]
+
+        if rag.get("hata"):
+            st.error(f"❌ {rag['hata']}")
+        else:
+            karar = rag.get("karar", "")
+            uzlasma = rag.get("kaynak_uzlasmasi", 0)
+
+            if karar == "Doğrulandı":
+                renk, ikon = "#4ade80", "✅"
+            elif karar in ["Kısmen Doğrulandı", "Çelişkili"]:
+                renk, ikon = "#facc15", "⚠️"
+            else:
+                renk, ikon = "#f87171", "❌"
+
+            st.markdown(f"""
+<div style="background:#1e1b4b;border-radius:14px;padding:1.2rem;
+border:2px solid {renk};margin-bottom:1rem">
+<div style="color:{renk};font-size:1.3rem;font-weight:700">
+{ikon} {karar}</div>
+<div style="color:#a855f7;font-size:0.9rem;margin-top:6px">
+Kaynak Uzlaşması: %{uzlasma} · 
+{rag.get('bulunan_kaynak_sayisi', 0)} kaynak tarandı · 
+{rag.get('indekslenen_haber', 0)} haber indekslendi · 
+Konu: {rag.get('tespit_edilen_konu', '?')}</div>
+<div style="color:#e2d9f3;font-size:0.95rem;margin-top:10px;font-style:italic">
+{rag.get('ana_bulgu', '')}</div>
+</div>""", unsafe_allow_html=True)
+
+            rag_col1, rag_col2 = st.columns(2)
+
+            with rag_col1:
+                if rag.get("destekleyen_kaynaklar"):
+                    st.markdown("**✅ Destekleyen Kaynaklar:**")
+                    for k in rag["destekleyen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+                if rag.get("eksik_bilgiler"):
+                    st.markdown("**⚠️ Kaynaklarda Olmayan İddialar:**")
+                    for e in rag["eksik_bilgiler"]:
+                        st.markdown(f"• {e}")
+
+            with rag_col2:
+                if rag.get("celen_kaynaklar"):
+                    st.markdown("**❌ Çelişen Kaynaklar:**")
+                    for k in rag["celen_kaynaklar"]:
+                        st.markdown(f"• {k}")
+                etki = rag.get("guvenirlilk_etkisi", 0)
+                isaret = "+" if etki >= 0 else ""
+                etki_renk = "#4ade80" if etki >= 0 else "#f87171"
+                st.markdown(
+                    f"**Güvenilirlik Etkisi:** "
+                    f"<span style='color:{etki_renk}'>{isaret}{etki}</span>",
+                    unsafe_allow_html=True
+                )
+
+            if rag.get("ozet"):
+                st.info(rag["ozet"])
+
+            # Multi-Query + HyDE sorgularını göster — portfolyo için
+            with st.expander("🔍 RAG Pipeline Detayları"):
+                st.caption("**Multi-Query Retrieval** — üretilen sorgular:")
+                for i, sorgu in enumerate(rag.get("kullanilan_sorgular", []), 1):
+                    st.markdown(f"`{i}.` {sorgu}")
+                if rag.get("hyde_sorgu"):
+                    st.caption("**HyDE** — varsayımsal belge:")
+                    st.markdown(f"_{rag['hyde_sorgu']}_")
+                if rag.get("indekslenen_kaynaklar"):
+                    st.caption("**İndekslenen Kaynaklar:**")
+                    st.markdown(", ".join(rag["indekslenen_kaynaklar"]))
+
+            if rag.get("kaynak_linkleri"):
+                with st.expander(f"📰 Taranan Haberler ({len(rag['kaynak_linkleri'])} kaynak)"):
+                    for link in rag["kaynak_linkleri"]:
+                        st.markdown(f"""
+**{link['baslik']}**  
+🗞️ {link['kaynak']} · 📅 {link['tarih']}  
+🔗 [{link['url'][:60]}...]({link['url']})
+""")

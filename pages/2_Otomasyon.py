@@ -1,3 +1,4 @@
+
 """
 VeritasAI — Manuel ReAct Agent (LangChain bağımlılığı yok)
 ===========================================================
@@ -10,6 +11,7 @@ import re
 import json
 import base64
 import tempfile
+import html
 from pathlib import Path
 from io import BytesIO
 
@@ -129,13 +131,13 @@ p, label, .stMarkdown { color: #e2d9f3 !important; }
 """, unsafe_allow_html=True)
 
 st.markdown("# 🤖 ReAct Agent — Otomatik Haber Doğrulama")
-st.markdown("##### Groq LLM + VeritasAI Tools ile multi-step reasoning")
+st.markdown("##### Groq LLM + VeritasAI Araçları ile Çok Adımlı Akıl Yürütme")
 
 st.markdown("""
 <div style="background:#12103a;border-radius:12px;padding:1rem 1.5rem;
 border:1px solid #4f46e5;margin-bottom:1rem">
 <p style="color:#a78bfa;margin:0;font-size:0.9rem">
-<b>ReAct Döngüsü:</b> Düşün → Tool Seç → Çalıştır → Gözlemle → Tekrar Düşün → Final Rapor<br>
+<b>⚙️ ReAct Döngüsü:</b> Düşün → Araç Seç → Çalıştır → Gözlemle → Tekrar Düşün → Final Rapor<br>
 <span class="badge badge-url">🔗 URL</span>
 <span class="badge badge-vid">🎥 Video</span>
 <span class="badge badge-img">🖼️ Görsel</span>
@@ -251,7 +253,8 @@ def gorsel_base64_al(uploaded_file) -> tuple[str, str]:
 # ── Yardımcı: Rapor HTML Oluşturucu ─────────────────────────────────
 def rapor_html_olustur(metin: str) -> str:
     """Ham rapor metnini renkli, yapılandırılmış HTML'e çevirir."""
-    satirlar = metin.strip().splitlines()
+    temiz_metin = (metin or "").replace("```html", "").replace("```", "")
+    satirlar = temiz_metin.strip().splitlines()
     html_parts = []
 
     # Anahtar kelime → stil eşleşmesi
@@ -265,6 +268,7 @@ def rapor_html_olustur(metin: str) -> str:
 
     # Başlık satırını ayır
     baslik = satirlar[0] if satirlar else "Analiz Raporu"
+    baslik = html.escape(baslik)
     govde_satirlar = satirlar[1:] if len(satirlar) > 1 else satirlar
 
     # Header
@@ -284,6 +288,7 @@ def rapor_html_olustur(metin: str) -> str:
             html_parts.append('<div style="height:0.4rem"></div>')
             continue
 
+        s_escaped = html.escape(s)
         sl = s.lower()
         css_cls = ""
         ikon = "▸"
@@ -303,20 +308,20 @@ def rapor_html_olustur(metin: str) -> str:
             skor_val = skor_match.group(1) or skor_match.group(2)
             skor_int = int(skor_val)
             renk = "#22c55e" if skor_int >= 70 else ("#f59e0b" if skor_int >= 40 else "#ef4444")
-            s = re.sub(
+            s_escaped = re.sub(
                 r"(\d{2,3})\s*[/|%]?\s*100",
                 f'<span class="skor-badge" style="color:{renk};border-color:{renk}">{skor_val}/100</span>',
-                s, count=1
+                s_escaped, count=1
             )
 
         # Verdict tespiti
         if "yanlış" in sl or "false" in sl or "sahte" in sl:
-            s += ' <span class="verdict-chip verdict-false">YANLIŞ</span>'
+            s_escaped += ' <span class="verdict-chip verdict-false">YANLIŞ</span>'
         elif "doğrulandı" in sl or "gerçek" in sl and "değil" not in sl:
-            s += ' <span class="verdict-chip verdict-true">DOĞRULANDI</span>'
+            s_escaped += ' <span class="verdict-chip verdict-true">DOĞRULANDI</span>'
 
         row_cls = f'rapor-satir {css_cls}' if css_cls else 'rapor-satir'
-        html_parts.append(f'<div class="{row_cls}"><span>{ikon}</span><span style="color:#e2d9f3">{s}</span></div>')
+        html_parts.append(f'<div class="{row_cls}"><span>{ikon}</span><span style="color:#e2d9f3">{s_escaped}</span></div>')
 
     html_parts.append("</div>")  # rapor-body kapat
     return "\n".join(html_parts)
@@ -603,7 +608,7 @@ def react_dongusu(girdi: str, adim_placeholder, gorsel_var: bool = False):
 
 # ── UI ────────────────────────────────────────────────────────────
 
-st.markdown("### 📥 Analiz Kaynağı Seç")
+st.markdown("### 🛠️ Analiz Kaynağı Seç")
 
 sekme = st.radio(
     "girdi_turu",
@@ -618,7 +623,7 @@ gorsel_var = False
 # ── Metin girişi ──────────────────────────────────────────────────
 if sekme == "📝 Metin":
     st.markdown('<div class="input-tab">', unsafe_allow_html=True)
-    st.markdown("#### 📝 Haber Metni")
+    st.markdown("#### 📝 Haber Metni Analizi")
     haber = st.text_area(
         "metin_input",
         height=180,
@@ -630,15 +635,15 @@ if sekme == "📝 Metin":
 # ── URL girişi ────────────────────────────────────────────────────
 elif sekme == "🔗 URL":
     st.markdown('<div class="input-tab">', unsafe_allow_html=True)
-    st.markdown("#### 🌐 Haber URL'si")
+    st.markdown("#### 🌐 Haber URL Analizi")
     st.markdown(
-        "<p style='color:#94a3b8;font-size:0.85rem'>Haber sitesinin URL'sini gir. "
-        "Agent önce sayfayı çekip metni analiz edecek.</p>",
+        "<p style='color:#94a3b8;font-size:0.85rem'>Haber sitesinin URL'sini girin. "
+        "Agent önce sayfayı çekip metni analiz eder.</p>",
         unsafe_allow_html=True,
     )
     url_input = st.text_input(
         "url_input",
-        placeholder="https://www.bbc.com/turkce/haberler/...",
+        placeholder="https://www.haberler.com/gundem/cumhurbaskani-erdogan-son-dakika-aciklamasi-5421973.html",
         label_visibility="collapsed",
     )
     if url_input:
@@ -648,10 +653,10 @@ elif sekme == "🔗 URL":
 # ── YouTube Video ─────────────────────────────────────────────────
 elif sekme == "🎥 YouTube Video":
     st.markdown('<div class="input-tab">', unsafe_allow_html=True)
-    st.markdown("#### 🎥 YouTube Video Analizi")
+    st.markdown("#### 🎥 Video Analizi")
     st.markdown(
-        "<p style='color:#94a3b8;font-size:0.85rem'>YouTube video linkini gir. "
-        "Agent transkripti çekip haber doğrulama analizi yapacak. "
+        "<p style='color:#94a3b8;font-size:0.85rem'>YouTube video bağlantısını girin. "
+        "Agent transkripti çekip haber doğrulama analizi yapar. "
         "<b style='color:#fb923c'>Altyazısı olan videolar için çalışır.</b></p>",
         unsafe_allow_html=True,
     )
@@ -667,10 +672,10 @@ elif sekme == "🎥 YouTube Video":
 # ── Görsel Analiz ─────────────────────────────────────────────────
 elif sekme == "🖼️ Görsel Analiz":
     st.markdown('<div class="input-tab">', unsafe_allow_html=True)
-    st.markdown("#### 🖼️ Görsel + İsteğe Bağlı Metin")
+    st.markdown("#### 🖼️ Görsel Analizi + İsteğe Bağlı Metin")
     st.markdown(
         "<p style='color:#94a3b8;font-size:0.85rem'>"
-        "Görsel yükle (ekran görüntüsü, haber fotoğrafı, infografik vb.). "
+        "Görsel yükleyin (ekran görüntüsü, haber fotoğrafı, infografik vb.). "
         "Agent <b style='color:#e879f9'>Groq Vision (llama-3.2-90b)</b> ile analiz edecek.</p>",
         unsafe_allow_html=True,
     )
@@ -707,7 +712,7 @@ elif sekme == "🖼️ Görsel Analiz":
 # ── Çalıştır Butonu ───────────────────────────────────────────────
 baslat_disabled = not bool(haber.strip()) and not gorsel_var
 baslat = st.button(
-    "🤖 Agent'ı Çalıştır",
+    "🚀 Agent'ı Çalıştır",
     type="primary",
     disabled=baslat_disabled,
 )
@@ -715,10 +720,10 @@ baslat = st.button(
 st.divider()
 
 if baslat and (haber.strip() or gorsel_var):
-    st.markdown("### ⚙️ Agent Düşünce Akışı")
+    st.markdown("### 🧠 Agent Düşünce Akışı")
     adim_placeholder = st.empty()
 
-    with st.spinner("Agent çalışıyor..."):
+    with st.spinner("Agent çalışıyor, ReAct döngüsü yürütülüyor..."):
         try:
             final = react_dongusu(haber, adim_placeholder, gorsel_var=gorsel_var)
             st.session_state["agent_sonuc"] = final
@@ -727,23 +732,23 @@ if baslat and (haber.strip() or gorsel_var):
             st.stop()
 
     st.divider()
-    st.markdown("### 📊 Agent Final Raporu")
-    st.markdown(f"""
-<div class="sonuc-kutu">
-{rapor_html_olustur(st.session_state.get('agent_sonuc', ''))}
-</div>
-""", unsafe_allow_html=True)
+    st.markdown("### 📋 Agent Final Raporu")
+    rapor_html = rapor_html_olustur(st.session_state.get("agent_sonuc", ""))
+    st.markdown(
+        '<div class="sonuc-kutu">' + rapor_html + "</div>",
+        unsafe_allow_html=True
+    )
 
 elif st.session_state.get("agent_sonuc"):
-    st.markdown("### 📊 Son Agent Raporu")
-    st.markdown(f"""
-<div class="sonuc-kutu">
-{rapor_html_olustur(st.session_state['agent_sonuc'])}
-</div>
-""", unsafe_allow_html=True)
+    st.markdown("### 📋 Son Agent Raporu")
+    rapor_html = rapor_html_olustur(st.session_state["agent_sonuc"])
+    st.markdown(
+        '<div class="sonuc-kutu">' + rapor_html + "</div>",
+        unsafe_allow_html=True
+    )
 
 st.divider()
-st.markdown("### 🏗️ Nasıl Çalışır?")
+st.markdown("### 🏗️ Sistem Nasıl Çalışır?")
 st.markdown("""
 <div style="background:#12103a;border-radius:12px;padding:1.2rem 1.5rem;border:1px solid #4f46e5">
 <p style="color:#e2d9f3;margin:0">
