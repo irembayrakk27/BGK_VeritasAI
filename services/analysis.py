@@ -3,6 +3,7 @@ import re
 import streamlit as st
 from groq import Groq
 from dotenv import load_dotenv, find_dotenv
+from RAG.rag_overview import rag_destekli_analiz
 
 load_dotenv(find_dotenv())
 
