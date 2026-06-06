@@ -27,8 +27,6 @@ VeritasAI karşılığı:
 
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-
-# embedding_module.py'deki hazır embd nesnesi — tekrar tanımlamıyoruz
 from embedding_module import embd
 from embedding_module import embed_soru, benzerlik_hesapla
 
@@ -39,6 +37,29 @@ from embedding_module import embed_soru, benzerlik_hesapla
 #   vectorstore = Chroma.from_documents(documents=splits,
 #                                       embedding=OpenAIEmbeddings())
 # ══════════════════════════════════════════════════════════════════
+
+def _tavily_ara(soru: str) -> list:
+    """
+    ChromaDB skoru eşiğin altında kalınca Tavily ile web araması yapar.
+    Sonuçları Document formatına çevirir — zincirin geri kalanı değişmez.
+    """
+    import os
+    from tavily import TavilyClient
+
+    client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
+    results = client.search(query=soru, max_results=3)
+
+    tavily_docs = [
+        Document(
+            page_content=r.get("content", ""),
+            metadata={"url": r.get("url", ""), "kaynak": "tavily"}
+        )
+        for r in results.get("results", [])
+    ]
+
+    print(f"[_tavily_ara] {len(tavily_docs)} web sonucu getirildi")
+    return tavily_docs
+
 
 def vectorstore_olustur(splits: list, koleksiyon: str = "veritasai_docs") -> Chroma:
     """
@@ -172,27 +193,6 @@ def ilgili_belgeleri_getir(retriever, soru: str) -> list:
 #   splits → vectorstore → retriever → docs
 # ══════════════════════════════════════════════════════════════════
 
-def _tavily_ara(soru: str) -> list:
-    """
-    ChromaDB skoru eşiğin altında kalınca Tavily ile web araması yapar.
-    Sonuçları Document formatına çevirir — zincirin geri kalanı değişmez.
-    """
-    import os
-    from tavily import TavilyClient
-
-    client = TavilyClient(api_key=os.environ.get("TAVILY_API_KEY"))
-    results = client.search(query=soru, max_results=3)
-
-    tavily_docs = [
-        Document(
-            page_content=r.get("content", ""),
-            metadata={"url": r.get("url", ""), "kaynak": "tavily"}
-        )
-        for r in results.get("results", [])
-    ]
-
-    print(f"[_tavily_ara] {len(tavily_docs)} web sonucu getirildi")
-    return tavily_docs
 
 
 def haber_sorgula(splits: list, soru: str, k: int = 1) -> list:
