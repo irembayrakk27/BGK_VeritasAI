@@ -6,7 +6,7 @@ except ImportError:
     from langchain_community.embeddings import HuggingFaceEmbeddings
 
 from langchain_community.utils.math import cosine_similarity
-
+ 
 
 # ══════════════════════════════════════════════════════════════════
 # MODÜLÜN TANIMI

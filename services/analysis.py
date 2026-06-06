@@ -79,13 +79,16 @@ Metin:
         "ham": raw,
     }
 
-def derin_analiz(text: str, on_sonuc: dict) -> dict:
+def derin_analiz(text: str, on_sonuc: dict, rag_ozet: str= "") -> dict:
+
+    rag_blok = f"\nRAG Bağlam Özeti:\n{rag_ozet}\n" if rag_ozet else ""
+
     prompt = f"""Bir meslektaşın bu haberi analiz etti ve şu sonuçlara ulaştı:
 - Güvenilirlik Skoru: %{on_sonuc['skor']}
 - Manipülasyon: {on_sonuc['manipulasyon']}
 - Kaynak Kalitesi: {on_sonuc['kaynak_kalitesi']}
 - Ön Yorum: {on_sonuc['on_yorum']}
-
+{rag_blok}
 Şimdi sen bu haberi bağımsız olarak daha derinlemesine analiz et.
 SADECE şu formatta yanıt ver:
 
@@ -135,8 +138,18 @@ def analyze_news_text(text: str, language: str = "tr", max_retries: int = 1) -> 
     last_error = None
     for attempt in range(max_retries + 1):
         try:
+            try:
+                rag_sonuc = rag_destekli_analiz(
+                    haber_metni=text,
+                    soru="Bu haberdeki temel iddialar neler? Bağlamı özetle."
+                )
+                rag_ozet = rag_sonuc.get("rag_cevap", "")
+            except Exception as rag_hata:
+                print(f"[RAG] Atlandı: {rag_hata}")
+                rag_ozet = ""
+
             on_sonuc = on_analiz(text)
-            derin_sonuc = derin_analiz(text, on_sonuc)
+            derin_sonuc = derin_analiz(text, on_sonuc, rag_ozet=rag_ozet)
             final_skor = round((on_sonuc["skor"] + derin_sonuc["skor"]) / 2)
 
             return {

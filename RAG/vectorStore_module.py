@@ -27,8 +27,8 @@ VeritasAI karşılığı:
 
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-from embedding_module import embd
-from embedding_module import embed_soru, benzerlik_hesapla
+from RAG.embedding_module import embd
+from RAG.embedding_module import embed_soru, benzerlik_hesapla
 
 # ══════════════════════════════════════════════════════════════════
 # BÖLÜM 1 — VEKTÖRLERİ KAYDET (VectorStore Oluşturma)

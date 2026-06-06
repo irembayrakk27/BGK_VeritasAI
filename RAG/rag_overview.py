@@ -14,24 +14,17 @@ Orijinaldeki değişiklikler:
     ✅ Türkçe RAG prompt eklendi
     ✅ VeritasAI analiz pipeline'ına bağlantı noktası hazır
 """
-
-from importlib.metadata import metadata
 import os
 from pathlib import Path
-
-from streamlit import text
-
-
-from RAG.chunk_module import chunk_otomatik
-from RAG.chunk_module import chunk_otomatik
 from dotenv import load_dotenv
 
 # ─── Ortam yükle ─────────────────────────────────────────────────
-load_dotenv(Path(__file__).resolve().parent / ".env")
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+#                                        ↑
+#                          RAG/ klasöründeyiz, bir üst dizin .env'in yeri
 
-# ─── Import'lar ──────────────────────────────────────────────────
+# ─── LangChain ───────────────────────────────────────────────────
 import bs4
-from langchain import hub
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import WebBaseLoader
 from langchain_community.vectorstores import Chroma
@@ -39,15 +32,17 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.prompts import ChatPromptTemplate
 
-# Groq — OpenAI değil!
+# ─── Groq ────────────────────────────────────────────────────────
 from langchain_groq import ChatGroq
 
-# HuggingFace Embeddings — OpenAIEmbeddings değil!
+# ─── HuggingFace Embeddings ──────────────────────────────────────
 try:
     from langchain_huggingface import HuggingFaceEmbeddings
 except ImportError:
     from langchain_community.embeddings import HuggingFaceEmbeddings
 
+# ─── RAG modülleri ───────────────────────────────────────────────
+from RAG.chunk_module import chunk_otomatik
 
 # ══════════════════════════════════════════════════════════════════
 # ADIM 1: LLM & EMBEDDING TANIMLA
