@@ -43,6 +43,7 @@ except ImportError:
 
 # ─── RAG modülleri ───────────────────────────────────────────────
 from RAG.chunk_module import chunk_otomatik
+from RAG.vectorStore_module import haber_sorgula
 
 # ══════════════════════════════════════════════════════════════════
 # ADIM 1: LLM & EMBEDDING TANIMLA
@@ -244,6 +245,7 @@ def rag_destekli_analiz(
     kaynak_url: str = None,
     soru: str = "Bu haberdeki temel iddialar neler? Güvenilirlik açısından değerlendir.",
 ) -> dict:
+    print("[RAg] rag_destekli_analiz çalıştı")
     """
     VeritasAI'nin mevcut analiz pipeline'ına RAG katmanı ekler.
 
@@ -281,6 +283,7 @@ def rag_destekli_analiz(
             print(f"⚠️  URL indeksleme başarısız: {e}")
 
     # RAG chain kur ve çalıştır
+    print("[RAG] Chain invoke başlıyor")
     chain = build_rag_chain(vs, k=3)
     rag_cevap = chain.invoke(soru)
 
@@ -288,6 +291,7 @@ def rag_destekli_analiz(
         "rag_cevap": rag_cevap,
         "koleksiyon": koleksiyon,
     }
+    print("[RAG] Chain invoke tamamlandı")
 
 
 # ══════════════════════════════════════════════════════════════════
