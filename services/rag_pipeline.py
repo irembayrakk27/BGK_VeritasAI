@@ -41,6 +41,8 @@ from langchain_core.documents import Document                     # langchain.sc
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from RAG.rag_overview import build_rag_chain, index_url, index_text
+
 
 from tavily import TavilyClient
 from dotenv import load_dotenv
@@ -494,3 +496,40 @@ def capraz_kaynak_dogrula(haber_metni: str) -> dict:
         return {"karar": "Hata", "hata": "Groq yanıtı JSON formatında gelmedi."}
     except Exception as e:
         return {"karar": "Hata", "hata": str(e)}
+
+def rag_destekli_analiz(
+    haber_metni: str,
+    kaynak_url: str = None,
+    soru: str = "Bu haberdeki temel iddialar neler? Güvenilirlik açısından değerlendir.",
+) -> dict:
+    import time
+
+    koleksiyon = f"veritas_{int(time.time())}"
+
+    vs = index_text(
+        text=haber_metni,
+        metadata={
+            "tip": "kullanici_girisi",
+            "url": kaynak_url or "",
+        },
+        collection_name=koleksiyon,
+    )
+
+    if kaynak_url:
+        try:
+            print(f"Kaynak URL indeksleniyor: {kaynak_url}")
+            index_url(
+                url=kaynak_url,
+                collection_name=koleksiyon
+            )
+        except Exception as e:
+            print(f"URL indeksleme başarısız: {e}")
+
+    chain = build_rag_chain(vs, k=3)
+
+    rag_cevap = chain.invoke(soru)
+
+    return {
+        "rag_cevap": rag_cevap,
+        "koleksiyon": koleksiyon,
+    }
