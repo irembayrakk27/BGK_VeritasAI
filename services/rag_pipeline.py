@@ -49,13 +49,20 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
+
 # ── Sabitler ──────────────────────────────────────────────────────
 CHROMA_PATH   = str(Path(__file__).resolve().parent.parent / "data" / "chroma_db")
 EMBED_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL    = "llama-3.3-70b-versatile"
 MAX_HABERLER  = 20
 TOP_K         = 5
-MQ_SAYI       = 3    # Multi-Query sorgu sayısı
+MQ_SAYI       = 3
+ 
+# ── HİBRİT SİSTEM SABİTLERİ ──────────────────────────────────────
+CHROMA_ESIK        = 0.30   # Bu skorun altındaysa ChromaDB yetersiz → Tavily devreye girer
+CHROMA_MIN_SONUC   = 2      # En az 2 sonuç yoksa Tavily devreye girer
+TAVILY_FALLBACK    = True   # False yaparak Tavily'i tamamen kapatabilirsin
+ 
 
 # Konu → NewsAPI anahtar kelime eşlemesi (Routing tablosu)
 KONU_ROUTING = {
@@ -352,34 +359,159 @@ def reciprocal_rank_fusion(sonuc_listeleri: list[list], k: int = 60) -> list:
     sirali = sorted(skor_tablosu.values(), key=lambda x: x["skor"], reverse=True)
     return [item["belge"] for item in sirali[:TOP_K]]
 
-
-def retrieval_yap(sorgular: list[str], hyde_metin: str) -> list:
+def _chroma_skor_kontrol(sorgular: list[str], hyde_metin: str) -> tuple[list, float]:
     """
-    Tüm sorgularla ChromaDB'de arama yapar:
-    - Multi-Query sorgular (MQ_SAYI adet)
-    - HyDE sorgusu (1 adet)
-    RRF ile birleştirir.
+    ChromaDB'de similarity_search_with_score ile arama yapar.
+    En yüksek skoru ve bulunan belgeleri döndürür.
+ 
+    Returns:
+        (belgeler, en_yuksek_skor)
+        Skor 0.0-1.0 arasında — 1.0 mükemmel eşleşme
     """
+    vectorstore   = chroma_ac()
+    tum_sonuclar  = []
+    en_yuksek_skor = 0.0
+ 
+    tum_sorgular = sorgular + [hyde_metin]
+ 
+    for sorgu in tum_sorgular:
+        try:
+            # score_threshold olmadan al, skoru kendimiz kontrol edelim
+            sonuclar_skorlu = vectorstore.similarity_search_with_relevance_scores(
+                sorgu, k=TOP_K
+            )
+            for belge, skor in sonuclar_skorlu:
+                if skor > en_yuksek_skor:
+                    en_yuksek_skor = skor
+                tum_sonuclar.append(belge)
+        except Exception as e:
+            print(f"[_chroma_skor_kontrol] Hata: {e}")
+            continue
+ 
+    return tum_sonuclar, en_yuksek_skor
+ 
+ 
+def _tavily_canli_ara(sorgular: list[str], konu: str) -> list[Document]:
+    """
+    Tavily ile canlı web araması yapar.
+    Sonuçları Document formatına çevirir.
+    Kaynak tipi 'tavily_canli' olarak işaretlenir.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return []
+ 
+    tavily   = TavilyClient(api_key=api_key)
+    belgeler = []
+    eklenen_urls = set()
+ 
+    for sorgu in sorgular[:2]:  # İlk 2 sorgu yeterli — rate limit koruma
+        try:
+            yanit = tavily.search(
+                query=sorgu,
+                search_depth="basic",
+                topic="news",
+                days=30,
+                max_results=4,
+            )
+            for r in yanit.get("results", []):
+                url = r.get("url", "")
+                if url in eklenen_urls:
+                    continue
+                eklenen_urls.add(url)
+ 
+                try:
+                    from urllib.parse import urlparse
+                    kaynak_adi = urlparse(url).netloc.replace("www.", "")
+                except Exception:
+                    kaynak_adi = "web"
+ 
+                belgeler.append(Document(
+                    page_content=r.get("content", "")[:600],
+                    metadata={
+                        "kaynak":    kaynak_adi,
+                        "url":       url,
+                        "baslik":    r.get("title", "")[:120],
+                        "tarih":     "",
+                        "konu":      konu,
+                        "kaynak_tip": "tavily_canli",  # ← canlı web, ChromaDB değil
+                    }
+                ))
+        except Exception as e:
+            print(f"[_tavily_canli_ara] Sorgu hatası: {e}")
+            continue
+ 
+    print(f"[_tavily_canli_ara] {len(belgeler)} canlı web belgesi getirildi")
+    return belgeler
+ 
+ 
+def retrieval_yap(sorgular: list[str], hyde_metin: str, konu: str = "genel") -> list:
+    """
+    HİBRİT RETRIEVAL — A + B şıkkı birlikte:
+ 
+    Adım 1 → ChromaDB'yi tara (kalıcı, birikimli veri)
+    Adım 2 → Skor kontrolü:
+        - Skor ≥ CHROMA_ESIK VE ≥ CHROMA_MIN_SONUC → ChromaDB yeterli
+        - Skor < CHROMA_ESIK VEYA < CHROMA_MIN_SONUC → Tavily devreye girer
+    Adım 3 → Tavily sonuçlarını da ChromaDB sonuçlarıyla birleştir
+    Adım 4 → RRF ile sırala, en iyi TOP_K belgeyi döndür
+ 
+    Her iki kaynaktan gelen belgeler metadata'da işaretli:
+        kaynak_tip: "tavily_indeks" | "tavily_canli"
+    """
+    print(f"[retrieval_yap] Hibrit retrieval başlıyor — konu: {konu}")
+ 
+    # ── ADIM 1: ChromaDB araması ──────────────────────────────────
+    chroma_belgeler, en_yuksek_skor = _chroma_skor_kontrol(sorgular, hyde_metin)
+    chroma_yeterli = (
+        en_yuksek_skor >= CHROMA_ESIK
+        and len(chroma_belgeler) >= CHROMA_MIN_SONUC
+    )
+ 
+    print(f"[retrieval_yap] ChromaDB → {len(chroma_belgeler)} belge, "
+          f"en yüksek skor: {en_yuksek_skor:.2f} "
+          f"({'✅ yeterli' if chroma_yeterli else '⚠️ yetersiz'})")
+ 
+    # ── ADIM 2: Tavily kararı ─────────────────────────────────────
+    tavily_belgeler = []
+    if TAVILY_FALLBACK and not chroma_yeterli:
+        print(f"[retrieval_yap] Tavily devreye giriyor...")
+        tavily_belgeler = _tavily_canli_ara(sorgular, konu)
+ 
+    # ── ADIM 3: Birleştir ─────────────────────────────────────────
+    # ChromaDB sonuçlarını sorgu bazlı listeye çevir (RRF için)
     vectorstore = chroma_ac()
     retriever   = vectorstore.as_retriever(search_kwargs={"k": TOP_K})
-
     tum_sonuclar = []
-
-    # Multi-Query retrieval
+ 
     for sorgu in sorgular:
         try:
             tum_sonuclar.append(retriever.invoke(sorgu))
         except Exception:
             continue
-
-    # HyDE retrieval
+ 
     try:
         tum_sonuclar.append(retriever.invoke(hyde_metin))
     except Exception:
         pass
-
-    return reciprocal_rank_fusion(tum_sonuclar)
-
+ 
+    # Tavily sonuçlarını ayrı bir liste olarak ekle (RRF'e giriyor)
+    if tavily_belgeler:
+        tum_sonuclar.append(tavily_belgeler)
+ 
+    # ── ADIM 4: RRF ile sırala ────────────────────────────────────
+    sonuc = reciprocal_rank_fusion(tum_sonuclar)
+ 
+    # Kaç tanesi hangi kaynaktan geldi — UI için istatistik
+    chroma_sayisi = sum(
+        1 for b in sonuc
+        if b.metadata.get("kaynak_tip") != "tavily_canli"
+    )
+    tavily_sayisi = len(sonuc) - chroma_sayisi
+    print(f"[retrieval_yap] Final: {len(sonuc)} belge "
+          f"(ChromaDB: {chroma_sayisi}, Tavily canlı: {tavily_sayisi})")
+ 
+    return sonuc
 
 # ═══════════════════════════════════════════════════════════════════
 # KATMAN 5 — GENERATION (Hallucination Guard dahil)
@@ -454,6 +586,17 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
     sonuc["bulunan_kaynak_sayisi"] = len(belgeler)
     sonuc["indekslenen_haber"]     = indeks_bilgi.get("makale_sayisi", 0)
     sonuc["tespit_edilen_konu"]    = indeks_bilgi.get("konu", "genel")
+    
+    # Hibrit istatistik — UI'da gösterilecek
+    sonuc["chroma_kaynak_sayisi"] = sum(
+        1 for b in belgeler
+        if b.metadata.get("kaynak_tip") != "tavily_canli"
+    )
+    sonuc["tavily_canli_sayisi"] = sum(
+        1 for b in belgeler
+        if b.metadata.get("kaynak_tip") == "tavily_canli"
+    )
+
 
     return sonuc
 
@@ -464,48 +607,56 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
 
 def capraz_kaynak_dogrula(haber_metni: str) -> dict:
     """
-    Tüm katmanları sırasıyla çalıştırır:
-    Indexing → Query Translation → Routing → Retrieval → Generation
+    Hibrit pipeline:
+    Indexing → Query Translation → Routing → Hibrit Retrieval → Generation
+ 
+    Hibrit Retrieval:
+    - ChromaDB'de kalıcı veri varsa ve skor yeterliyse → ChromaDB kullan
+    - Skor yetersizse → Tavily canlı web araması ekle
+    - Her iki durumda RRF ile birleştir
     """
     try:
-        # KATMAN 1: Indexing
+        # KATMAN 1: Indexing (Tavily → ChromaDB'ye kaydet)
         indeks = haberleri_indeksle(haber_metni)
         if indeks["hata"] and indeks["eklenen"] == 0:
             return {"karar": "Kaynak Bulunamadı", "hata": indeks["hata"]}
-
+ 
+        konu = indeks.get("konu", "genel")
+ 
         # KATMAN 2: Query Translation
-        mq_sorgular = multi_query_uret(haber_metni)        # Multi-Query
-        hyde_metin  = hyde_sorgu_uret(haber_metni)         # HyDE
-
-        # KATMAN 4: Retrieval + RRF
-        en_iyi_belgeler = retrieval_yap(mq_sorgular, hyde_metin)
+        mq_sorgular = multi_query_uret(haber_metni)
+        hyde_metin  = hyde_sorgu_uret(haber_metni)
+ 
+        # KATMAN 4: Hibrit Retrieval + RRF
+        en_iyi_belgeler = retrieval_yap(mq_sorgular, hyde_metin, konu=konu)
         if not en_iyi_belgeler:
             return {"karar": "Yetersiz Kaynak", "hata": "Benzer haber bulunamadı."}
-
+ 
         # KATMAN 5: Generation
         sonuc = rapor_uret(haber_metni, en_iyi_belgeler, indeks)
-
-        # Pipeline meta bilgisi — portfolyo için görünür kılıyoruz
-        sonuc["kullanilan_sorgular"] = mq_sorgular
-        sonuc["hyde_sorgu"]          = hyde_metin[:150] + "..."
+ 
+        # Pipeline meta bilgisi
+        sonuc["kullanilan_sorgular"]   = mq_sorgular
+        sonuc["hyde_sorgu"]            = hyde_metin[:150] + "..."
         sonuc["indekslenen_kaynaklar"] = indeks.get("kaynaklar", [])
-
+ 
         return sonuc
-
+ 
     except json.JSONDecodeError:
         return {"karar": "Hata", "hata": "Groq yanıtı JSON formatında gelmedi."}
     except Exception as e:
         return {"karar": "Hata", "hata": str(e)}
-
+ 
+ 
 def rag_destekli_analiz(
     haber_metni: str,
     kaynak_url: str = None,
     soru: str = "Bu haberdeki temel iddialar neler? Güvenilirlik açısından değerlendir.",
 ) -> dict:
     import time
-
+ 
     koleksiyon = f"veritas_{int(time.time())}"
-
+ 
     vs = index_text(
         text=haber_metni,
         metadata={
@@ -514,7 +665,7 @@ def rag_destekli_analiz(
         },
         collection_name=koleksiyon,
     )
-
+ 
     if kaynak_url:
         try:
             print(f"Kaynak URL indeksleniyor: {kaynak_url}")
@@ -524,12 +675,12 @@ def rag_destekli_analiz(
             )
         except Exception as e:
             print(f"URL indeksleme başarısız: {e}")
-
-    chain = build_rag_chain(vs, k=3)
-
+ 
+    chain    = build_rag_chain(vs, k=3)
     rag_cevap = chain.invoke(soru)
-
+ 
     return {
         "rag_cevap": rag_cevap,
         "koleksiyon": koleksiyon,
     }
+ 
