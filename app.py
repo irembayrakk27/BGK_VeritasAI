@@ -746,6 +746,12 @@ Konu: {rag.get('tespit_edilen_konu', '?')}</div>
                     st.caption("**İndekslenen Kaynaklar:**")
                     st.markdown(", ".join(rag["indekslenen_kaynaklar"]))
 
+                # Hibrit kaynak istatistiği
+                chroma_s = rag.get("chroma_kaynak_sayisi", 0)
+                tavily_s = rag.get("tavily_canli_sayisi", 0)
+                st.caption("**Retrieval Kaynağı:**")
+                st.markdown(f"📦 ChromaDB: **{chroma_s}** belge &nbsp;|&nbsp; 🌐 Tavily canlı: **{tavily_s}** belge", unsafe_allow_html=True)    
+
             if rag.get("kaynak_linkleri"):
                 with st.expander(f"📰 Taranan Haberler ({len(rag['kaynak_linkleri'])} kaynak)"):
                     for link in rag["kaynak_linkleri"]:

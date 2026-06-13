@@ -38,8 +38,8 @@ from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document                     # langchain.schema değil
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from RAG.rag_overview import build_rag_chain, index_url, index_text
 
@@ -520,11 +520,7 @@ def retrieval_yap(sorgular: list[str], hyde_metin: str, konu: str = "genel") -> 
 def rapor_uret(haber_metni: str, belgeler: list, indeks_bilgi: dict) -> dict:
     """
     Groq LLM ile çapraz kaynak doğrulama raporu üretir.
-    
-    Hallucination Guard:
-    Prompt'ta açıkça "sadece verilen kaynaklara dayan" diyoruz.
-    LLM kendi eğitim verisinden bilgi eklememeli.
-    Bu RAG'ın temel güvenlik katmanı.
+    Hallucination Guard: sadece verilen kaynaklara dayan.
     """
     kaynak_metinleri = []
     for i, belge in enumerate(belgeler, 1):
@@ -548,7 +544,7 @@ BULUNAN KAYNAKLAR ({kaynak_sayisi} adet):
 Değerlendir:
 1. Kaynaklar haberi doğruluyor mu, çürütüyor mu, yoksa farklı bakış açısı mı sunuyor?
 2. Kaynaklar arasında çelişki var mı?
-3. Haberde kaynaklarda olmayan iddialar var mı? (Sadece kaynaklara göre değerlendir)
+3. Haberde kaynaklarda olmayan iddialar var mı?
 4. Kaynak çeşitliliği ve güvenilirliği nasıl?
 
 SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
@@ -565,29 +561,49 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
 
     zincir = prompt | llm_ac(temperature=0.1) | StrOutputParser()
     raw = zincir.invoke({
-        "haber":        haber_metni[:1000],
-        "kaynaklar":    kaynaklar_str[:3500],
+        "haber":         haber_metni[:1000],
+        "kaynaklar":     kaynaklar_str[:3500],
         "kaynak_sayisi": len(belgeler),
     })
 
+    # JSON başlangıcını bul — LLM bazen önce metin yazıyor
     raw = raw.replace("```json", "").replace("```", "").strip()
-    sonuc = json.loads(raw)
+    json_baslangic = raw.find("{")
+    json_bitis = raw.rfind("}") + 1
+    if json_baslangic != -1 and json_bitis > json_baslangic:
+        raw = raw[json_baslangic:json_bitis]
+
+    try:
+        sonuc = json.loads(raw)
+    except json.JSONDecodeError:
+        # Fallback: sıfır temperature ile tekrar dene
+        raw2 = (prompt | llm_ac(temperature=0.0) | StrOutputParser()).invoke({
+            "haber":         haber_metni[:500],
+            "kaynaklar":     kaynaklar_str[:2000],
+            "kaynak_sayisi": len(belgeler),
+        })
+        raw2 = raw2.replace("```json", "").replace("```", "").strip()
+        j2  = raw2.find("{")
+        j2e = raw2.rfind("}") + 1
+        raw2 = raw2[j2:j2e] if j2 != -1 else raw2
+        sonuc = json.loads(raw2)
 
     # Kaynak linklerini ekle
     sonuc["kaynak_linkleri"] = [
         {
-            "baslik":  b.metadata.get("baslik", "")[:80],
-            "kaynak":  b.metadata.get("kaynak", ""),
-            "url":     b.metadata.get("url", ""),
-            "tarih":   b.metadata.get("tarih", ""),
+            "baslik":     b.metadata.get("baslik", "")[:80],
+            "kaynak":     b.metadata.get("kaynak", ""),
+            "url":        b.metadata.get("url", ""),
+            "tarih":      b.metadata.get("tarih", ""),
+            "kaynak_tip": b.metadata.get("kaynak_tip", "chroma"),
         }
         for b in belgeler if b.metadata.get("url")
     ]
     sonuc["bulunan_kaynak_sayisi"] = len(belgeler)
     sonuc["indekslenen_haber"]     = indeks_bilgi.get("makale_sayisi", 0)
     sonuc["tespit_edilen_konu"]    = indeks_bilgi.get("konu", "genel")
-    
-    # Hibrit istatistik — UI'da gösterilecek
+
+    # Hibrit istatistik
     sonuc["chroma_kaynak_sayisi"] = sum(
         1 for b in belgeler
         if b.metadata.get("kaynak_tip") != "tavily_canli"
@@ -597,10 +613,7 @@ SADECE şu JSON formatında yanıt ver, başka hiçbir şey yazma:
         if b.metadata.get("kaynak_tip") == "tavily_canli"
     )
 
-
     return sonuc
-
-
 # ═══════════════════════════════════════════════════════════════════
 # ANA PIPELINE
 # ═══════════════════════════════════════════════════════════════════
