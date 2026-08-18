@@ -59,7 +59,7 @@ Metin:
 {text}"""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=[
             {"role": "system", "content": SISTEM_MESAJI},
             {"role": "user", "content": prompt},
@@ -106,7 +106,7 @@ Analiz edilecek metin:
 {text}"""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=[
             {"role": "system", "content": SISTEM_MESAJI},
             {"role": "user", "content": prompt},
@@ -193,7 +193,7 @@ KANIT_GÜVENİLİRLİĞİ: [Güçlü / Orta / Zayıf]
 AÇIKLAMA: [Kanıtı neden bu şekilde değerlendirdin, 2-3 cümle]"""
 
     response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         messages=[
             {"role": "system", "content": SISTEM_MESAJI},
             {"role": "user", "content": prompt},
