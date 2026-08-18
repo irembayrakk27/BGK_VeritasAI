@@ -53,7 +53,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 # ── Sabitler ──────────────────────────────────────────────────────
 CHROMA_PATH   = str(Path(__file__).resolve().parent.parent / "data" / "chroma_db")
 EMBED_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
-GROQ_MODEL    = "llama-3.3-70b-versatile"
+GROQ_MODEL    =  "openai/gpt-oss-120b" 
 MAX_HABERLER  = 20
 TOP_K         = 5
 MQ_SAYI       = 3
